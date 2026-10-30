@@ -34,7 +34,7 @@ to set up or change their roles.
    `"zai/glm-5.3-flash:high"` (off/minimal/low/medium/high/xhigh/max). agy
    picks it by model id instead (no `--effort`): `gemini-3.8-flash-high`.
    Every role can write — the reporting protocol has each one journal to
-   `.any-subagent/<session>.md`, which a read-only role could not do. Scope a
+   `.any-subagent/<session>/notes.md`, which a read-only role could not do. Scope a
    role by the worktree you send it to, not by taking its tools away.
 
 5. Smoke-test each role with a trivial prompt — some models still fail only

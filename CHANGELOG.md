@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.1.0 — 2026-10-30
+
+- Work logs are structured. Each session gets a directory,
+  `.any-subagent/<session>/`. `agent-send` appends one JSON line per message
+  to `turns.jsonl`: `ts`, `turn`, `role`, `backend`, `model`, `session_id`,
+  `spec`, `report`, `exit`, `duration_s`. The agent writes only its reasoning,
+  to `notes.md`, and no longer copies the spec. `--note` writes to
+  `<session>/inbox.md`. `--log` prints every turn's spec and report, then the
+  notes.
+- The flat `.any-subagent/<session>.md` and `<session>.inbox.md` files from
+  earlier releases are not read. `--log` does not show them; `cat` them, or
+  delete them.
+
 ## 2.0.1 — 2026-10-23
 
 - Skill: a new Trust section says the other agent's reply, work log and inbox

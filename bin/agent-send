@@ -21,8 +21,8 @@ backends: $BACKENDS   roles: defined in $CONFIG
   --list    list sessions for the current directory
   --roles   show configured roles
   --models  list models currently available per backend (default: all installed)
-  --log     print a session's work log (roles journal there; the reply you
-            get back is only the summary)
+  --log     print a session's work log: every turn's spec and report, then
+            the notes the agent kept on its reasoning
   --note    drop an amendment into a running session's inbox; the agent picks
             it up at its next step boundary
 EOF
@@ -46,19 +46,28 @@ case "${1:-}" in
   n=${2:?--note needs a session name}
   shift 2
   [[ $# -ge 1 ]] || usage
-  mkdir -p "$log_dir"
+  mkdir -p "$log_dir/$n"
   [[ -f $log_dir/.gitignore ]] || printf '*\n' >"$log_dir/.gitignore"
-  printf -- '- [%s] %s\n' "$(date -Iseconds)" "$*" >>"$log_dir/$n.inbox.md"
-  echo "agent-send: note queued in $log_dir/$n.inbox.md" >&2
+  printf -- '- [%s] %s\n' "$(date -Iseconds)" "$*" >>"$log_dir/$n/inbox.md"
+  echo "agent-send: note queued in $log_dir/$n/inbox.md" >&2
   exit 0
   ;;
 --log)
-  f="$log_dir/${2:?--log needs a session name}.md"
-  [[ -f $f ]] || {
-    echo "agent-send: no work log at $f" >&2
+  sdir="$log_dir/${2:?--log needs a session name}"
+  [[ -f $sdir/turns.jsonl || -f $sdir/notes.md ]] || {
+    echo "agent-send: no work log in $sdir" >&2
     exit 1
   }
-  cat "$f"
+  if [[ -f $sdir/turns.jsonl ]]; then
+    jq -r '"## turn \(.turn) — \(.ts) — \([.role, .backend, .model] | map(values) | join(" · ")) — exit \(.exit), \(.duration_s)s\n### spec\n\(.spec)\n### report\n\(.report)"' "$sdir/turns.jsonl" || {
+      echo "agent-send: could not read $sdir/turns.jsonl" >&2
+      exit 1
+    }
+  fi
+  if [[ -f $sdir/notes.md ]]; then
+    echo '## notes'
+    cat "$sdir/notes.md"
+  fi
   exit 0
   ;;
 --list)
@@ -87,7 +96,7 @@ case "${1:-}" in
   ;;
 esac
 
-model=""
+model="" role=""
 while [[ "${1:-}" == -* ]]; do
   case "$1" in
   -m) model="${2:?-m needs a value}"; shift 2 ;;
@@ -117,6 +126,7 @@ else
     exit 1
   }
   [[ -n $model ]] || model=$(jq -r --arg r "$target" '.roles[$r].model // empty' "$CONFIG")
+  role=$target
 fi
 
 command -v "$backend" >/dev/null || {
@@ -133,11 +143,14 @@ die_stale() {
   exit 1
 }
 
-# One file per session: the spec, the agent's notes, its own summary. The
-# agent writes all of it — the wrapper only guarantees the directory exists.
-logfile="$log_dir/$name.md"
+# One dir per session. The wrapper records every turn's facts (spec, report,
+# exit, timing) in turns.jsonl; the agent writes only its reasoning, to
+# notes.md, so the record never depends on the agent following a format.
+sdir="$log_dir/$name"
+notes="$sdir/notes.md"
+spec=$msg
 
-mkdir -p "$log_dir"
+mkdir -p "$sdir"
 # the directory ignores itself: work logs are scratch next to the diff, not
 # repo content the user has to notice and clean out of `git status`
 [[ -f $log_dir/.gitignore ]] || printf '*\n' >"$log_dir/.gitignore"
@@ -147,15 +160,15 @@ mkdir -p "$log_dir"
 msg="$msg
 
 --- reporting protocol ---
-Before each major step, and once more before you report, read $log_dir/$name.inbox.md
+Before each major step, and once more before you report, read $sdir/inbox.md
 if it exists and is non-empty: it holds amendments to this task from the
-orchestrator. Apply them, record them in the log under '### amendment', then
+orchestrator. Apply them, record them in your notes under '### amendment', then
 truncate the file to empty (keep the file).
-Append to $logfile — append only, never rewrite earlier entries:
-'## <ISO timestamp> — <one-line task>', then '### spec' holding the task above
-copied verbatim (the task only — never this protocol block), then '### notes': what you did and why, decisions and the
-alternatives you rejected, commands you ran, anything you could not finish.
-Then reply with the report only — the reasoning stays in the log — using
+Append to $notes — append only, never rewrite earlier entries:
+'## <ISO timestamp> — <one-line task>', then '### notes': what you did and why,
+decisions and the alternatives you rejected, commands you ran, anything you
+could not finish. Do not copy the task there; it is already recorded.
+Then reply with the report only — the reasoning stays in the notes — using
 exactly these sections, each kept tight:
 
 ## Summary
@@ -168,8 +181,14 @@ the commands you ran and their results, or why you could not run them.
 assumptions, rejected alternatives worth knowing, follow-ups, blockers, or
 'none'.
 ## Log
-$logfile"
+$notes"
 
+SECONDS=0
+reply=$(mktemp)
+# a subshell, not $( ): bash 3.2 (macOS /bin/bash) misparses case inside
+# command substitution. Each branch's exit leaves only the subshell, so the
+# turn is recorded whatever the outcome.
+(
 case "$backend" in
 codex)
   # --json: the human-readable banner ("session id: ...") is not a stable
@@ -417,3 +436,19 @@ agy)
   printf '%s\n' "$text"
   ;;
 esac
+) >"$reply"
+rc=$?
+# ponytail: written after the turn — a run killed by an external timeout leaves no line and a stray $reply
+turn=$(($(cat "$sdir/turns.jsonl" 2>/dev/null | wc -l) + 1))
+jq -nc --arg ts "$(date -Iseconds)" --argjson turn "$turn" --arg role "$role" \
+  --arg backend "$backend" --arg model "$model" --arg sid "$(cat "$sf" 2>/dev/null)" \
+  --arg spec "$spec" --rawfile report "$reply" --argjson exit "$rc" --argjson dur "$SECONDS" \
+  'def or_null: if . == "" then null else . end;
+  {ts: $ts, turn: $turn, role: ($role | or_null), backend: $backend, model: ($model | or_null),
+   session_id: ($sid | or_null), spec: $spec, report: $report, exit: $exit, duration_s: $dur}' \
+  >>"$sdir/turns.jsonl" ||
+  # warn only: the reply still reaches the caller, and a non-zero exit would invite a billable re-send
+  echo "agent-send: could not record this turn in $sdir/turns.jsonl" >&2
+cat "$reply"
+rm -f "$reply"
+exit "$rc"

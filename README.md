@@ -74,23 +74,26 @@ are free-form names you define once, per user.
 | Component | What it does |
 |---|---|
 | `skills/any-subagent/` | The skill: `SKILL.md` routes to `workflows/setup.md` (config interview) or `workflows/delegate.md` (cycle, quick reference, common mistakes) |
-| `<repo>/.any-subagent/<session>.md` | Per-session work log: the spec sent, the agent's notes, appended per message; read it back with `agent-send --log <session>` |
-| `bin/agent-send` | ~400-line bash wrapper; Claude Code puts it on the Bash tool's PATH automatically, elsewhere `install.sh` links it |
+| `<repo>/.any-subagent/<session>/` | Per-session work log: `turns.jsonl` (one line per message, written by agent-send: spec, report, role, backend, model, exit code, duration), `notes.md` (the agent's reasoning) and `inbox.md`; read it back with `agent-send --log <session>` |
+| `bin/agent-send` | ~450-line bash wrapper; Claude Code puts it on the Bash tool's PATH automatically, elsewhere `install.sh` links it |
 | `install.sh` | Links `agent-send` onto PATH (and the skill into `~/.codex/skills` for a plain git clone) — needed by every harness except Claude Code |
-| `tests/agent-send.test.sh` | Runs `agent-send` against stub `claude` and `codex` CLIs: session create, resume by name, loud failure on an expired session, roles. CI runs it with shellcheck |
+| `tests/agent-send.test.sh` | Runs `agent-send` against stub `claude` and `codex` CLIs: session create, resume by name, loud failure on an expired session, roles, per-session work logs. CI runs it with shellcheck |
 | `docs/demo.tape` | Renders `docs/demo.gif` with [VHS](https://github.com/charmbracelet/vhs) inside Claude Code, against your `impl` and `impl2` roles |
 | `.claude-plugin/marketplace.json` | This repo doubles as its own plugin marketplace; Codex reads the same manifest |
 
 Write roles report like a colleague, not a transcript: every message tells
-them to append the spec they were given plus their own notes to
-`<repo-root>/.any-subagent/<session>.md`, and to reply with a structured report (summary, changes, verification, notes,
-log path) instead of a transcript. The orchestrator's context stays clean and the
+them to append their reasoning to `<repo-root>/.any-subagent/<session>/notes.md`,
+and to reply with a structured report (summary, changes, verification, notes,
+log path) instead of a transcript. `agent-send` itself appends one JSON line per
+message to `turns.jsonl` next to it — the spec sent, the report, role, backend,
+model, exit code and duration — so the record does not depend on the agent, and
+`jq` can query it. The orchestrator's context stays clean and the
 detail is one `agent-send --log <session>` away. The directory ignores itself,
 so the logs never appear in `git status`.
 
 Changed your mind mid-run? `agent-send --note <session> "..."` queues an
 amendment in the session's inbox; write roles re-read it between steps, apply
-it, and record it in the log. The CLIs cannot be interrupted mid-turn, so this
+it, and record it in their notes. The CLIs cannot be interrupted mid-turn, so this
 is cooperative — it lands at the agent's next step boundary.
 
 No MCP server, no daemon, no polling. `agent-send` maps each
@@ -103,7 +106,7 @@ it — the CLIs themselves keep the real conversation history.
   or [Codex](https://github.com/openai/codex) v0.154+
 - At least one backend installed and authenticated:
   `codex` · `opencode` · `claude` · `pi` · `agy`
-- `jq`
+- `jq` 1.6 or later
 
 ## Installation
 
@@ -188,7 +191,7 @@ For pi, the model string also carries the reasoning level as a suffix —
 `max`). agy picks it by model id instead (no `--effort`) — `gemini-3.8-flash-high`,
 straight from `agent-send --models agy`.
 Every role can write, because every role journals its work to
-`.any-subagent/<session>.md` — codex runs with sandbox `workspace-write`
+`.any-subagent/<session>/notes.md` — codex runs with sandbox `workspace-write`
 plus the repository's git dirs as writable roots (the common `.git` and, in
 a linked worktree, its own `.git/worktrees/<name>`), so it can commit from a
 worktree; opencode `--auto`, claude `--permission-mode acceptEdits`, pi with its

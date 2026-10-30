@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stub-CLI tests for agent-send: first call, resume by name, stale session, codex, roles.
+# Stub-CLI tests for agent-send: first call, resume by name, stale session, codex, roles, work logs.
 set -u
 
 # resolve the repo from this test's own path
@@ -84,5 +84,18 @@ out=$(run impl r1 hi) || fail "check 5: role impl exited non-zero"
 grep -q -- '--model m1' "$T/calls.log" || fail "check 5: claude stub not called with '--model m1'"
 err=$(run nosuchrole r1 hi 2>&1 >/dev/null) && fail "check 5: unknown role exited zero"
 grep -q 'unknown role' <<<"$err" || fail "check 5: stderr lacks 'unknown role'"
+
+# 6. the wrapper records every turn per session; --log renders it; --note fills the inbox
+L="$T/work/.any-subagent"
+[[ $(wc -l <"$L/r1/turns.jsonl") -eq 1 ]] || fail "check 6: r1/turns.jsonl does not hold exactly one turn"
+jq -e '.spec == "hi" and .report == "stub reply\n" and .exit == 0 and .role == "impl" and .backend == "claude"' \
+  "$L/r1/turns.jsonl" >/dev/null || fail "check 6: r1 turn record is wrong: $(cat "$L/r1/turns.jsonl")"
+jq -e '.exit != 0' "$L/s2/turns.jsonl" >/dev/null || fail "check 6: expired-session turn not recorded with non-zero exit"
+run --log r1 | grep -q 'stub reply' || fail "check 6: --log r1 lacks the report"
+run --log nosuch 2>/dev/null && fail "check 6: --log of an unknown session exited zero"
+run --note s9 amend 2>/dev/null
+grep -q 'amend' "$L/s9/inbox.md" || fail "check 6: --note did not write s9/inbox.md"
+printf 'n1\n' >"$L/s9/notes.md"
+run --log s9 | grep -q 'n1' || fail "check 6: --log of a notes-only session lacks the notes"
 
 echo "all checks passed"
