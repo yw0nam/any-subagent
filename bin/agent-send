@@ -6,7 +6,7 @@
 set -uo pipefail
 
 CONFIG="${ANY_SUBAGENT_CONFIG:-$HOME/.config/any-subagent/config.json}"
-BACKENDS="codex opencode claude pi agy"
+BACKENDS="codex opencode claude pi agy qwen"
 
 usage() {
   cat >&2 <<EOF
@@ -89,6 +89,8 @@ case "${1:-}" in
     claude) echo "no list command; aliases always resolve to the latest model: opus, sonnet, haiku (full ids like claude-opus-4-8 also accepted)" ;;
     pi) pi --list-models 2>/dev/null ;;
     agy) agy models 2>/dev/null | grep -v '^Fetching' ;;
+    # no list command; the models are whatever the user configured as providers
+    qwen) jq -r '.modelProviders[]?[]?.id' ~/.qwen/settings.json 2>/dev/null ;;
     esac
     echo
   done
@@ -431,6 +433,42 @@ agy)
   [[ -n $text ]] || {
     printf '%s\n' "$out" >&2
     echo "agent-send: agy returned no report — $(jq -r '[.status, (.error // empty | if type == "string" then . else tojson end), (.denied_actions // [] | map("denied " + .display_name) | .[])] | join(", ")' <<<"$res")" >&2
+    exit 1
+  }
+  printf '%s\n' "$text"
+  ;;
+qwen)
+  # Qwen Code. Headless runs drop the shell tool unless approval is yolo (auto
+  # and auto-edit leave the agent unable to run tests), so: approve all tools,
+  # but run the whole CLI in its sandbox — the same posture as agy.
+  # ponytail: --sandbox is sandbox-exec on macOS; Linux needs docker or podman.
+  flags=(-o json --yolo --sandbox)
+  [[ -n $model ]] && flags+=(-m "$model")
+  [[ -f $sf ]] && flags+=(-r "$(cat "$sf")")
+  # ponytail: synchronous like claude — a run killed by an external timeout
+  # before the reply is orphaned; -o stream-json emits session_id early.
+  # </dev/null: qwen appends stdin to the prompt and waits for its EOF.
+  out=$(qwen "${flags[@]}" "$msg" </dev/null 2>&1)
+  rc=$?
+  # -o json prints one array of events; the sandbox can add plain-text lines
+  events=$(grep '^\[' <<<"$out" | tail -1)
+  if [[ $rc -ne 0 ]]; then
+    printf '%s\n' "$out"
+    # an unknown -r id exits 1 with "No saved session found"
+    [[ -f $sf ]] && die_stale
+    exit "$rc"
+  fi
+  id=$(jq -r '.[0].session_id // empty' <<<"$events" 2>/dev/null)
+  [[ -n $id ]] || {
+    printf '%s\n' "$out"
+    echo "agent-send: could not extract qwen session id" >&2
+    exit 1
+  }
+  printf '%s\n' "$id" >"$sf"
+  text=$(jq -r '.[] | select(.type == "result" and (.is_error | not)) | .result // empty' <<<"$events")
+  [[ -n $text ]] || {
+    printf '%s\n' "$out" >&2
+    echo "agent-send: qwen returned no report" >&2
     exit 1
   }
   printf '%s\n' "$text"
