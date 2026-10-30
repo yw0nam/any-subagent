@@ -1,7 +1,7 @@
 {
   "name": "any-subagent",
   "description": "Delegate work to external coding-agent CLIs (codex, opencode, claude, pi, agy) through session-persistent, role-based conversations",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "author": {
     "name": "yw0nam",
     "email": "spow2544@gmail.com"
