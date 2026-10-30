@@ -15,8 +15,8 @@ enforces these.
   and names the file to delete; agent-send never starts a fresh session in its place.
 - A failure after a billable turn warns and keeps the reply. A non-zero exit invites a
   re-send that costs another turn.
-- Every backend gets the same posture: it can write, it runs non-interactively, and its
-  sandbox (when it has one) keeps network and the repo's git dirs.
+- Every backend can write and runs non-interactively. A sandboxed backend still needs
+  network and the repo's git dirs, including a linked worktree's (see the codex branch).
 
 ## Portability
 
