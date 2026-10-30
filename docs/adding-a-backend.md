@@ -8,8 +8,8 @@ CLI; the stub tests prove the wrapper, not the CLI.
 
 1. Add the name to `BACKENDS` and a branch to `--models` (a live list, or a line that
    says there is none).
-2. Add the branch to the turn's `case`. It runs the CLI non-interactively with
-   `</dev/null`, writes the session id to `$sf` as early as the CLI exposes it, prints
+2. Add the branch to the turn's `case`. It runs the CLI non-interactively, writes the
+   session id to `$sf` as early as the CLI exposes it, prints
    only the final report on stdout, and exits non-zero when the turn produced no report.
 3. Resuming an unknown id must fail. When the CLI silently starts a new session
    instead, detect it (compare ids, or check the id exists before the turn) and call
@@ -23,8 +23,9 @@ Run each with the real CLI from a linked worktree (`git worktree add`), through
 `agent-send`:
 
 - [ ] A new session, then a follow-up that recalls a word from the first message.
-- [ ] A dead id (`echo dead > /tmp/any-subagent/<hash>/<backend>-<name>`) exits
-  non-zero with `resume failed`.
+- [ ] For a backend that resumes a stored id: a dead id
+  (`echo dead > "/tmp/any-subagent/$(pwd -P | sha1sum | cut -c1-12)/<backend>-<name>"`)
+  exits non-zero with `resume failed`.
 - [ ] The agent runs `git commit --allow-empty -m probe` in the linked worktree and the
   commit lands (sandboxes often block the worktree's git dir).
 - [ ] A turn whose JSON output exceeds 64 KB (have it read and quote a large file)

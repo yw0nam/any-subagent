@@ -11,10 +11,11 @@ enforces these.
   human-readable banner.
 - Write the least code that fully meets the requirement. A flag, config key or helper
   exists because a current caller needs it. A helper has two or more callers.
-- Context loss is loud. A dead session, a missing id or an empty report exits non-zero
-  and names the file to delete; agent-send never starts a fresh session in its place.
-- A failure after a billable turn warns and keeps the reply. A non-zero exit invites a
-  re-send that costs another turn.
+- Context loss is loud. A dead session exits non-zero through `die_stale`, which names
+  the state file to delete; agent-send never starts a fresh session in its place.
+- agent-send's own bookkeeping (the turn record) warns only and keeps the reply: a
+  non-zero exit there invites a re-send that costs another turn. A lost session still
+  exits non-zero.
 - Every backend can write and runs non-interactively. A sandboxed backend still needs
   network and the repo's git dirs, including a linked worktree's (see the codex branch).
 
@@ -25,20 +26,18 @@ userland. Traps CI does not always catch:
 
 - `case` inside `$( )` misparses on bash 3.2; run the branch in a `( )` subshell.
 - No `declare -A`, `mapfile`, `wait -n`, `${x,,}`, `setsid`.
-- `stat` flags differ; use `date -r <file>`. `sed -i` differs; avoid it in the script.
+- `stat` flags differ; read a file's mtime with `date -r <file>`. `sed -i` differs; avoid it in the script.
 
 ## Compatibility
 
-The plugin is public. Released behaviour (a flag, a config key, a backend, the log
-format) keeps working until a release that announces its removal: the code carries a
-comment naming that release, the path prints a warning on stderr, and CHANGELOG lists
-it. Code no release has shipped is deleted outright. The owner can decide an
-exception; the PR body states it.
+A change that drops or replaces a flag, config key, backend or log format deletes the
+old path outright, with no compat layer, fallback, warning or migration code. CHANGELOG
+marks it as breaking and gives the one-line migration (2.0.0 and 2.3.0 are examples).
 
 ## Tests
 
 - Tests run against stub CLIs on PATH, never a real backend.
-- One check per behaviour, named for the behaviour. The failing test is its own
+- One numbered check per behaviour. The failing test is its own
   `test:` commit before the `feat:` or `fix:` commit.
 - A claim that a change prevents a bug cites a measured RED.
 
@@ -52,6 +51,6 @@ exception; the PR body states it.
 
 ## Commits and PRs
 
-- Conventional commit titles, in English, with no AI attribution trailer.
+- Commits and PRs are in English, with no AI attribution trailer.
 - Specs and decision notes stay out of the repo; a decision lives in the code, the PR
   body and CHANGELOG.
