@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.2.0 — 2026-10-30
+
+- New backend: `qwen` (Qwen Code). `agent-send` runs it with
+  `-o json --yolo --sandbox` and resumes a session with `-r <id>`. An unknown
+  id fails with "resume failed". Headless qwen removes its shell tool in every
+  approval mode except yolo, so the sandbox confines the CLI instead:
+  sandbox-exec on macOS, docker or podman on Linux.
+- `agent-send --models qwen` lists the model ids in `~/.qwen/settings.json`
+  (`modelProviders`). Qwen Code has no list command.
+
 ## 2.1.0 — 2026-10-30
 
 - Work logs are structured. Each session gets a directory,

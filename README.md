@@ -2,15 +2,16 @@
 
 ![CI](https://img.shields.io/github/actions/workflow/status/yw0nam/any-subagent/ci.yml?branch=main&style=flat-square&label=ci)
 ![License](https://img.shields.io/github/license/yw0nam/any-subagent.svg?style=flat-square)
-![Version](https://img.shields.io/badge/version-2.0.1-blue.svg?style=flat-square)
-![Backends](https://img.shields.io/badge/backends-codex%20%C2%B7%20opencode%20%C2%B7%20claude%20%C2%B7%20pi%20%C2%B7%20agy-8A2BE2?style=flat-square)
+![Version](https://img.shields.io/badge/version-2.2.0-blue.svg?style=flat-square)
+![Backends](https://img.shields.io/badge/backends-codex%20%C2%B7%20opencode%20%C2%B7%20claude%20%C2%B7%20pi%20%C2%B7%20agy%20%C2%B7%20qwen-8A2BE2?style=flat-square)
 ![Harness](https://img.shields.io/badge/harness-Claude%20Code%20%C2%B7%20Codex-2ea44f?style=flat-square)
 
 **Run other coding-agent CLIs as background subagents.** any-subagent lets
 your orchestrator — Claude Code or Codex — delegate work to
 [codex](https://github.com/openai/codex),
 [opencode](https://opencode.ai), [pi](https://github.com/earendil-works/pi),
-[agy](https://antigravity.google/docs/cli/using/) (Antigravity CLI), or
+[agy](https://antigravity.google/docs/cli/using/) (Antigravity CLI),
+[qwen](https://github.com/QwenLM/qwen-code) (Qwen Code), or
 another `claude` through **session-persistent, role-based conversations**. The
 orchestrator writes the spec, farms out execution, sends review feedback to
 the *same* conversation, and keeps the final quality gate.
@@ -105,7 +106,7 @@ it — the CLIs themselves keep the real conversation history.
 - An orchestrator with a shell tool: [Claude Code](https://code.claude.com) v2.x+
   or [Codex](https://github.com/openai/codex) v0.154+
 - At least one backend installed and authenticated:
-  `codex` · `opencode` · `claude` · `pi` · `agy`
+  `codex` · `opencode` · `claude` · `pi` · `agy` · `qwen`
 - `jq` 1.6 or later
 
 ## Installation
@@ -156,7 +157,7 @@ sandbox_mode = "workspace-write"
 [sandbox_workspace_write]
 network_access = true
 # only the backends you delegate to
-writable_roots = ["~/.codex", "~/.claude", "~/.local/share/opencode", "~/.pi", "~/.gemini"]
+writable_roots = ["~/.codex", "~/.claude", "~/.local/share/opencode", "~/.pi", "~/.gemini", "~/.qwen"]
 ```
 
 and run `codex --profile any-subagent`. Claude Code needs no equivalent.
@@ -189,7 +190,8 @@ Role names are free-form. `model` is optional (backend default when omitted).
 For pi, the model string also carries the reasoning level as a suffix —
 `"zai/glm-5.3-flash:high"` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`,
 `max`). agy picks it by model id instead (no `--effort`) — `gemini-3.8-flash-high`,
-straight from `agent-send --models agy`.
+straight from `agent-send --models agy`. qwen takes the model ids configured
+in `~/.qwen/settings.json` (`modelProviders`), e.g. `qwen3.8-max`.
 Every role can write, because every role journals its work to
 `.any-subagent/<session>/notes.md` — codex runs with sandbox `workspace-write`
 plus the repository's git dirs as writable roots (the common `.git` and, in
@@ -197,7 +199,9 @@ a linked worktree, its own `.git/worktrees/<name>`), so it can commit from a
 worktree; opencode `--auto`, claude `--permission-mode acceptEdits`, pi with its
 `edit`/`write` tools, agy with `--sandbox --dangerously-skip-permissions`
 (headless agy denies any tool not allow-listed, and one denied command ends
-the turn with no report; the sandbox confines its terminal instead). Scope a
+the turn with no report; the sandbox confines its terminal instead), qwen
+with `--yolo --sandbox` (headless qwen drops its shell tool in every other
+approval mode; the sandbox is sandbox-exec on macOS, docker or podman on Linux). Scope a
 role by the worktree you send it to, not by taking its tools away.
 
 ## Usage
