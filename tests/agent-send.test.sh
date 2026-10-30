@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stub-CLI tests for agent-send: first call, resume by name, stale session, codex, roles, work logs.
+# Stub-CLI tests for agent-send: first call, resume by name, stale session, codex, qwen, roles, work logs.
 set -u
 
 # resolve the repo from this test's own path
@@ -41,7 +41,17 @@ fi
 echo '{"type":"thread.started","thread_id":"codex-tid-1"}'
 echo '{"type":"item.completed","item":{"type":"agent_message","text":"stub reply"}}'
 STUB
-chmod +x "$T/bin/claude" "$T/bin/codex"
+# stub qwen: dead-id resumes fail like a missing session, the rest print the -o json event array
+cat >"$T/bin/qwen" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >>'$T/calls.log'
+if [[ " \$* " == *' -r dead-id '* ]]; then
+  echo 'No saved session found with ID dead-id' >&2
+  exit 1
+fi
+echo '[{"type":"system","session_id":"qwen-sid-1"},{"type":"result","session_id":"qwen-sid-1","is_error":false,"result":"stub reply"}]'
+STUB
+chmod +x "$T/bin/claude" "$T/bin/codex" "$T/bin/qwen"
 
 printf '%s\n' '{"roles":{"impl":{"backend":"claude","model":"m1"}}}' >"$T/config.json"
 
@@ -97,5 +107,15 @@ run --note s9 amend 2>/dev/null
 grep -q 'amend' "$L/s9/inbox.md" || fail "check 6: --note did not write s9/inbox.md"
 printf 'n1\n' >"$L/s9/notes.md"
 run --log s9 | grep -q 'n1' || fail "check 6: --log of a notes-only session lacks the notes"
+
+# 7. qwen sessions: session id on first call, -r on follow-up, loud failure on a dead id
+out=$(run qwen q1 hi) || fail "check 7: qwen new session exited non-zero"
+[[ $out == 'stub reply' ]] || fail "check 7: expected 'stub reply', got: $out"
+[[ $(cat "$STATE/qwen-q1") == 'qwen-sid-1' ]] || fail "check 7: state file qwen-q1 does not hold qwen-sid-1"
+run qwen q1 again >/dev/null || fail "check 7: qwen follow-up exited non-zero"
+grep -q -- '-r qwen-sid-1' "$T/calls.log" || fail "check 7: calls.log has no '-r qwen-sid-1'"
+printf 'dead-id\n' >"$STATE/qwen-q2"
+err=$(run qwen q2 x 2>&1 >/dev/null) && fail "check 7: dead qwen session exited zero"
+grep -q 'resume failed' <<<"$err" || fail "check 7: stderr lacks 'resume failed'"
 
 echo "all checks passed"

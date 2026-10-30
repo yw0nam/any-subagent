@@ -6,7 +6,7 @@ to set up or change their roles.
 0. Make sure `agent-send` runs: `command -v agent-send`. If it is missing, show
    the user `install.sh` at the plugin root and run it only after they say yes
    (Claude Code links it for you; no other harness does).
-1. Detect installed CLIs: `for c in codex opencode claude pi agy; do command -v $c; done`
+1. Detect installed CLIs: `for c in codex opencode claude pi agy qwen; do command -v $c; done`
 2. Query the models each installed backend can use right now:
    `agent-send --models`. Model catalogs change too often to trust memory —
    only offer names from this live list.
@@ -33,6 +33,8 @@ to set up or change their roles.
    For pi, a reasoning level can be appended to the model —
    `"zai/glm-5.3-flash:high"` (off/minimal/low/medium/high/xhigh/max). agy
    picks it by model id instead (no `--effort`): `gemini-3.8-flash-high`.
+   qwen lists the providers configured in `~/.qwen/settings.json`
+   (`modelProviders`), e.g. `qwen3.8-max`.
    Every role can write — the reporting protocol has each one journal to
    `.any-subagent/<session>/notes.md`, which a read-only role could not do. Scope a
    role by the worktree you send it to, not by taking its tools away.
@@ -51,7 +53,7 @@ a delegated agent needs:
 |---|---|---|
 | write `/tmp/any-subagent/...` | allowed | agent-send's own session state survives |
 | network | **blocked** | the delegated CLI never reaches its provider |
-| write `~/.codex`, `~/.claude`, `~/.local/share/opencode`, `~/.pi`, `~/.gemini` | **blocked** | the delegated CLI cannot persist its own session — resume breaks |
+| write `~/.codex`, `~/.claude`, `~/.local/share/opencode`, `~/.pi`, `~/.gemini`, `~/.qwen` | **blocked** | the delegated CLI cannot persist its own session — resume breaks |
 
 Interactively, Codex will offer to re-run the failed command outside the
 sandbox, so a run survives on approval — but every `agent-send` call asks
@@ -66,7 +68,7 @@ sandbox_mode = "workspace-write"
 [sandbox_workspace_write]
 network_access = true
 # only the backends you actually delegate to; ~ is expanded
-writable_roots = ["~/.codex", "~/.claude", "~/.local/share/opencode", "~/.pi", "~/.gemini"]
+writable_roots = ["~/.codex", "~/.claude", "~/.local/share/opencode", "~/.pi", "~/.gemini", "~/.qwen"]
 ```
 
 Then run `codex --profile any-subagent`. Full access

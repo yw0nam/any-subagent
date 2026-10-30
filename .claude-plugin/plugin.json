@@ -1,7 +1,7 @@
 {
   "name": "any-subagent",
-  "description": "Delegate work to external coding-agent CLIs (codex, opencode, claude, pi, agy) through session-persistent, role-based conversations",
-  "version": "2.1.0",
+  "description": "Delegate work to external coding-agent CLIs (codex, opencode, claude, pi, agy, qwen) through session-persistent, role-based conversations",
+  "version": "2.2.0",
   "author": {
     "name": "yw0nam",
     "email": "spow2544@gmail.com"
@@ -9,5 +9,5 @@
   "homepage": "https://github.com/yw0nam/any-subagent",
   "repository": "https://github.com/yw0nam/any-subagent",
   "license": "MIT",
-  "keywords": ["codex", "opencode", "pi", "antigravity", "delegation", "multi-agent", "orchestration"]
+  "keywords": ["codex", "opencode", "pi", "antigravity", "qwen", "delegation", "multi-agent", "orchestration"]
 }
