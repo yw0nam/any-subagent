@@ -16,6 +16,8 @@ usage: agent-send [-m MODEL] <role|backend> <session-name> <message...>
        agent-send --models [backend]
        agent-send --log <session-name>
        agent-send --note <session-name> <text...>
+       agent-send --status <session-name>
+       agent-send --stop <session-name>
 backends: $BACKENDS   roles: defined in $CONFIG
   -m        model override (passed to the backend's model flag)
   --list    list sessions for the current directory
@@ -25,6 +27,8 @@ backends: $BACKENDS   roles: defined in $CONFIG
             the notes the agent kept on its reasoning
   --note    drop an amendment into a running session's inbox; the agent picks
             it up at its next step boundary
+  --status  report whether a session is running or idle, and when it last moved
+  --stop    stop a running turn: kill its process group and record the turn
 EOF
   exit 2
 }
@@ -33,6 +37,18 @@ state_dir="/tmp/any-subagent/$(pwd -P | sha1sum | cut -c1-12)"
 # Work logs live in the tree the agent works on (worktrees isolate themselves),
 # not in state_dir: the point is that they are readable next to the diff.
 log_dir="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)/.any-subagent"
+
+# A bare kill -0 also matches an unrelated process that reused the pid, so a
+# live turn is one that is alive and still an agent-send.
+turn_pid() { # $1: session dir — prints the pid of the turn running in it
+  local d=$1 p
+  [[ -f $d/pid ]] || return 1
+  p=$(cat "$d/pid" 2>/dev/null)
+  [[ -n $p ]] || return 1
+  kill -0 "$p" 2>/dev/null || return 1
+  [[ $(ps -o command= -p "$p" 2>/dev/null) == *agent-send* ]] || return 1
+  printf '%s\n' "$p"
+}
 
 case "${1:-}" in
 --note)
@@ -68,6 +84,60 @@ case "${1:-}" in
     echo '## notes'
     cat "$sdir/notes.md"
   fi
+  exit 0
+  ;;
+--status)
+  s=${2:?--status needs a session name}
+  sdir="$log_dir/$s"
+  [[ -d $sdir ]] || {
+    echo "agent-send: no session '$s' in $log_dir" >&2
+    exit 1
+  }
+  if pid=$(turn_pid "$sdir"); then
+    # last activity: whichever log file moved most recently
+    newest=$sdir/pid
+    for f in "$sdir/notes.md" "$sdir/turns.jsonl"; do
+      [[ -f $f && $(date -r "$f" +%s) -gt $(date -r "$newest" +%s) ]] && newest=$f
+    done
+    echo "running — pid $pid, started $(date -r "$sdir/pid" -Iseconds), last activity $(date -r "$newest" -Iseconds)"
+    exit 0
+  fi
+  if [[ -s $sdir/turns.jsonl ]]; then
+    tail -1 "$sdir/turns.jsonl" | jq -r '"idle — last turn \(.turn) at \(.ts), exit \(.exit)"'
+  else
+    echo "idle — no turns"
+  fi
+  exit 0
+  ;;
+--stop)
+  s=${2:?--stop needs a session name}
+  sdir="$log_dir/$s"
+  pid=$(turn_pid "$sdir") || {
+    echo "agent-send: session '$s' is not running" >&2
+    rm -f "$sdir/pid" # a stale pid file would only mislead the next --status
+    exit 0
+  }
+  # The turn owns a process group, so one signal reaches the backend CLI and
+  # everything it spawned: TERM first, KILL for whatever ignored it.
+  kill -TERM -- "-$pid" 2>/dev/null
+  n=0
+  while kill -0 -- "-$pid" 2>/dev/null && [[ $n -lt 50 ]]; do
+    sleep 0.2
+    n=$((n + 1))
+  done
+  kill -0 -- "-$pid" 2>/dev/null && kill -KILL -- "-$pid" 2>/dev/null
+  # agent-send removes the pid file only after the stopped turn is recorded, so
+  # its disappearance is the acknowledgement that the log is complete.
+  n=0
+  while [[ -f $sdir/pid && $n -lt 75 ]]; do
+    sleep 0.2
+    n=$((n + 1))
+  done
+  [[ -f $sdir/pid ]] && {
+    echo "agent-send: session '$s' stopped, but its turn record is not confirmed" >&2
+    exit 1
+  }
+  echo "agent-send: stopped session '$s'" >&2
   exit 0
   ;;
 --list)
@@ -156,6 +226,12 @@ mkdir -p "$sdir"
 # the directory ignores itself: work logs are scratch next to the diff, not
 # repo content the user has to notice and clean out of `git status`
 [[ -f $log_dir/.gitignore ]] || printf '*\n' >"$log_dir/.gitignore"
+# One turn per session dir: two would interleave in turns.jsonl and fight over
+# the same backend session id.
+if p=$(turn_pid "$sdir"); then
+  echo "agent-send: session '$name' is already running (pid $p); stop it with agent-send --stop $name" >&2
+  exit 1
+fi
 # Delegated agents keep the long story in the worktree and hand back only the
 # summary — otherwise every delegation dumps a transcript into the
 # orchestrator's context, and the reasoning is lost the moment it scrolls.
@@ -190,7 +266,12 @@ reply=$(mktemp)
 # a subshell, not $( ): bash 3.2 (macOS /bin/bash) misparses case inside
 # command substitution. Each branch's exit leaves only the subshell, so the
 # turn is recorded whatever the outcome.
+# Job control puts the turn in its own process group (id = pid), which is what
+# lets --stop reach the backend CLI and everything it spawned. </dev/null: with
+# job control on, bash no longer hands a background job /dev/null as stdin.
+set -m
 (
+set +m # inherited job control would put the branches' own jobs outside the group
 case "$backend" in
 codex)
   # --json: the human-readable banner ("session id: ...") is not a stable
@@ -272,6 +353,8 @@ codex)
 opencode)
   flags=(--format json)
   flags+=(--auto)
+  # --standalone ties the server to this turn, so --stop ends the work too
+  flags+=(--standalone)
   [[ -n $model ]] && flags+=(-m "$model")
   if [[ -f $sf ]]; then
     # opencode v2 creates a session for an unknown --session id and exits 0 —
@@ -480,8 +563,27 @@ qwen)
   printf '%s\n' "$text"
   ;;
 esac
-) >"$reply"
+) </dev/null >"$reply" &
+pid=$!
+set +m
+# A harness timeout that kills agent-send must not orphan the backend: forward
+# the signal to the whole group and stay alive to record the turn.
+trap 'kill -TERM -- "-$pid" 2>/dev/null' TERM INT HUP
+printf '%s\n' "$pid" >"$sdir/pid"
+wait "$pid"
 rc=$?
+# An interrupted wait reports 143 while a descendant that ignored TERM is still
+# alive, so drain the group before recording: nothing keeps billing unseen.
+n=0
+while kill -0 -- "-$pid" 2>/dev/null; do
+  sleep 0.2
+  n=$((n + 1))
+  [[ $n -eq 50 ]] && kill -KILL -- "-$pid" 2>/dev/null
+done
+# 127 means "already reaped", not a status the turn ever returned
+wait "$pid" 2>/dev/null
+rc2=$?
+[[ $rc2 -ne 127 ]] && rc=$rc2
 # ponytail: written after the turn — a run killed by an external timeout leaves no line and a stray $reply
 turn=$(($(cat "$sdir/turns.jsonl" 2>/dev/null | wc -l) + 1))
 jq -nc --arg ts "$(date -Iseconds)" --argjson turn "$turn" --arg role "$role" \
@@ -493,6 +595,7 @@ jq -nc --arg ts "$(date -Iseconds)" --argjson turn "$turn" --arg role "$role" \
   >>"$sdir/turns.jsonl" ||
   # warn only: the reply still reaches the caller, and a non-zero exit would invite a billable re-send
   echo "agent-send: could not record this turn in $sdir/turns.jsonl" >&2
+rm -f "$sdir/pid" # after the record: --stop reads this removal as confirmation
 cat "$reply"
 rm -f "$reply"
 exit "$rc"
