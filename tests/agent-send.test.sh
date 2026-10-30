@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stub-CLI tests for agent-send: first call, resume by name, stale session, codex, qwen,
+# Stub-CLI tests for agent-send: first call, resume by name, stale session, codex,
 # roles, work logs, stopping a running turn, usage-limit fallback.
 set -u
 
@@ -57,17 +57,7 @@ fi
 echo '{"type":"thread.started","thread_id":"codex-tid-1"}'
 echo '{"type":"item.completed","item":{"type":"agent_message","text":"stub reply"}}'
 STUB
-# stub qwen: dead-id resumes fail like a missing session, the rest print the -o json event array
-cat >"$T/bin/qwen" <<STUB
-#!/usr/bin/env bash
-printf '%s\n' "\$*" >>'$T/calls.log'
-if [[ " \$* " == *' -r dead-id '* ]]; then
-  echo 'No saved session found with ID dead-id' >&2
-  exit 1
-fi
-echo '[{"type":"system","session_id":"qwen-sid-1"},{"type":"result","session_id":"qwen-sid-1","is_error":false,"result":"stub reply"}]'
-STUB
-chmod +x "$T/bin/claude" "$T/bin/codex" "$T/bin/qwen"
+chmod +x "$T/bin/claude" "$T/bin/codex"
 
 printf '%s\n' '{"roles":{"impl":{"backend":"claude","model":"m1"},"lim":{"backend":"claude","model":"lim1","fallback":"lim2"},"limnofb":{"backend":"claude","model":"lim1"}}}' >"$T/config.json"
 
@@ -134,69 +124,59 @@ grep -q 'amend' "$L/s9/inbox.md" || fail "check 6: --note did not write s9/inbox
 printf 'n1\n' >"$L/s9/notes.md"
 run --log s9 | grep -q 'n1' || fail "check 6: --log of a notes-only session lacks the notes"
 
-# 7. qwen sessions: session id on first call, -r on follow-up, loud failure on a dead id
-out=$(run qwen q1 hi) || fail "check 7: qwen new session exited non-zero"
-[[ $out == 'stub reply' ]] || fail "check 7: expected 'stub reply', got: $out"
-[[ $(cat "$STATE/qwen-q1") == 'qwen-sid-1' ]] || fail "check 7: state file qwen-q1 does not hold qwen-sid-1"
-run qwen q1 again >/dev/null || fail "check 7: qwen follow-up exited non-zero"
-grep -q -- '-r qwen-sid-1' "$T/calls.log" || fail "check 7: calls.log has no '-r qwen-sid-1'"
-printf 'dead-id\n' >"$STATE/qwen-q2"
-err=$(run qwen q2 x 2>&1 >/dev/null) && fail "check 7: dead qwen session exited zero"
-grep -q 'resume failed' <<<"$err" || fail "check 7: stderr lacks 'resume failed'"
-
-# 8. a running turn can be stopped, refuses a second turn, and reports its status
+# 7. a running turn can be stopped, refuses a second turn, and reports its status
 bg_run claude slow1 SLOW
 slow1=$!
-wait_for "$L/slow1/pid" 50 || fail "check 8: slow1/pid never appeared"
-out=$(run --status slow1) || fail "check 8: --status of a running session exited non-zero"
-[[ $out == running* ]] || fail "check 8: --status of a running session: $out"
-err=$(run claude slow1 again 2>&1 >/dev/null) && fail "check 8: a second turn on a running session exited zero"
-grep -q 'already running' <<<"$err" || fail "check 8: stderr lacks 'already running'"
-run --stop slow1 2>/dev/null || fail "check 8: --stop of a running session exited non-zero"
+wait_for "$L/slow1/pid" 50 || fail "check 7: slow1/pid never appeared"
+out=$(run --status slow1) || fail "check 7: --status of a running session exited non-zero"
+[[ $out == running* ]] || fail "check 7: --status of a running session: $out"
+err=$(run claude slow1 again 2>&1 >/dev/null) && fail "check 7: a second turn on a running session exited zero"
+grep -q 'already running' <<<"$err" || fail "check 7: stderr lacks 'already running'"
+run --stop slow1 2>/dev/null || fail "check 7: --stop of a running session exited non-zero"
 wait "$slow1"
 rc=$?
-[[ $rc -eq 143 ]] || fail "check 8: the stopped agent-send exited $rc, expected 143"
+[[ $rc -eq 143 ]] || fail "check 7: the stopped agent-send exited $rc, expected 143"
 desc=$(cat "$T/slow.pid")
-kill -0 "$desc" 2>/dev/null && fail "check 8: the TERM-ignoring descendant $desc outlived --stop"
+kill -0 "$desc" 2>/dev/null && fail "check 7: the TERM-ignoring descendant $desc outlived --stop"
 
 # killing agent-send itself (a harness timeout) takes the backend's group with it
 bg_run claude slow2 SLOW
 slow2=$!
-wait_for "$L/slow2/pid" 50 || fail "check 8: slow2/pid never appeared"
+wait_for "$L/slow2/pid" 50 || fail "check 7: slow2/pid never appeared"
 kill -TERM "$slow2"
 wait "$slow2"
 rc=$?
-[[ $rc -eq 143 ]] || fail "check 8: agent-send killed by TERM exited $rc, expected 143"
+[[ $rc -eq 143 ]] || fail "check 7: agent-send killed by TERM exited $rc, expected 143"
 desc=$(cat "$T/slow.pid")
-kill -0 "$desc" 2>/dev/null && fail "check 8: the descendant outlived agent-send"
-[[ -f $L/slow2/pid ]] && fail "check 8: slow2/pid outlived agent-send"
+kill -0 "$desc" 2>/dev/null && fail "check 7: the descendant outlived agent-send"
+[[ -f $L/slow2/pid ]] && fail "check 7: slow2/pid outlived agent-send"
 
 jq -e '.exit == 143' <<<"$(tail -1 "$L/slow1/turns.jsonl")" >/dev/null ||
-  fail "check 8: the stopped turn is not recorded with exit 143: $(tail -1 "$L/slow1/turns.jsonl")"
-out=$(run --status slow1) || fail "check 8: --status of a stopped session exited non-zero"
-[[ $out == idle* ]] || fail "check 8: --status of a stopped session: $out"
-err=$(run --stop slow1 2>&1 >/dev/null) || fail "check 8: --stop of an idle session exited non-zero"
-grep -q 'not running' <<<"$err" || fail "check 8: stderr lacks 'not running'"
-run --status nosuch 2>/dev/null && fail "check 8: --status of an unknown session exited zero"
+  fail "check 7: the stopped turn is not recorded with exit 143: $(tail -1 "$L/slow1/turns.jsonl")"
+out=$(run --status slow1) || fail "check 7: --status of a stopped session exited non-zero"
+[[ $out == idle* ]] || fail "check 7: --status of a stopped session: $out"
+err=$(run --stop slow1 2>&1 >/dev/null) || fail "check 7: --stop of an idle session exited non-zero"
+grep -q 'not running' <<<"$err" || fail "check 7: stderr lacks 'not running'"
+run --status nosuch 2>/dev/null && fail "check 7: --status of an unknown session exited zero"
 
-# 9. a usage-limited turn retries once on the role's fallback model; other failures never retry
-run lim f1 hi >"$T/f1.out" 2>"$T/f1.err" || fail "check 9: the fallback retry exited non-zero"
-[[ $(cat "$T/f1.out") == 'stub reply' ]] || fail "check 9: expected 'stub reply', got: $(cat "$T/f1.out")"
-grep -q -- '--model lim2' "$T/calls.log" || fail "check 9: calls.log has no '--model lim2'"
-grep -q 'usage limit' "$T/f1.err" || fail "check 9: stderr lacks 'usage limit'"
-grep -qF "$filler" "$T/f1.err" || fail "check 9: stderr lacks the full 400-character limit detail"
-[[ $(wc -l <"$L/f1/turns.jsonl") -eq 2 ]] || fail "check 9: f1/turns.jsonl does not hold exactly two turns"
+# 8. a usage-limited turn retries once on the role's fallback model; other failures never retry
+run lim f1 hi >"$T/f1.out" 2>"$T/f1.err" || fail "check 8: the fallback retry exited non-zero"
+[[ $(cat "$T/f1.out") == 'stub reply' ]] || fail "check 8: expected 'stub reply', got: $(cat "$T/f1.out")"
+grep -q -- '--model lim2' "$T/calls.log" || fail "check 8: calls.log has no '--model lim2'"
+grep -q 'usage limit' "$T/f1.err" || fail "check 8: stderr lacks 'usage limit'"
+grep -qF "$filler" "$T/f1.err" || fail "check 8: stderr lacks the full 400-character limit detail"
+[[ $(wc -l <"$L/f1/turns.jsonl") -eq 2 ]] || fail "check 8: f1/turns.jsonl does not hold exactly two turns"
 jq -e '.exit == 1' <<<"$(head -1 "$L/f1/turns.jsonl")" >/dev/null ||
-  fail "check 9: the limited turn is not recorded with exit 1: $(head -1 "$L/f1/turns.jsonl")"
+  fail "check 8: the limited turn is not recorded with exit 1: $(head -1 "$L/f1/turns.jsonl")"
 jq -e '.exit == 0 and .model == "lim2"' <<<"$(tail -1 "$L/f1/turns.jsonl")" >/dev/null ||
-  fail "check 9: the fallback turn is not recorded with exit 0 and model lim2: $(tail -1 "$L/f1/turns.jsonl")"
+  fail "check 8: the fallback turn is not recorded with exit 0 and model lim2: $(tail -1 "$L/f1/turns.jsonl")"
 n0=$(wc -l <"$T/claude.calls")
-run limnofb f2 hi >/dev/null 2>"$T/f2.err" && fail "check 9: a usage limit without a fallback exited zero"
-grep -q 'usage limit' "$T/f2.err" || fail "check 9: stderr lacks 'usage limit' without a fallback"
-[[ $(wc -l <"$T/claude.calls") -eq $((n0 + 1)) ]] || fail "check 9: a usage limit without a fallback retried"
+run limnofb f2 hi >/dev/null 2>"$T/f2.err" && fail "check 8: a usage limit without a fallback exited zero"
+grep -q 'usage limit' "$T/f2.err" || fail "check 8: stderr lacks 'usage limit' without a fallback"
+[[ $(wc -l <"$T/claude.calls") -eq $((n0 + 1)) ]] || fail "check 8: a usage limit without a fallback retried"
 printf 'dead-id\n' >"$STATE/claude-f3"
-run lim f3 x >/dev/null 2>"$T/f3.err" && fail "check 9: a non-limit failure on a fallback role exited zero"
-grep -q 'resume failed' "$T/f3.err" || fail "check 9: stderr lacks 'resume failed'"
-[[ $(wc -l <"$L/f3/turns.jsonl") -eq 1 ]] || fail "check 9: f3/turns.jsonl does not hold exactly one turn"
+run lim f3 x >/dev/null 2>"$T/f3.err" && fail "check 8: a non-limit failure on a fallback role exited zero"
+grep -q 'resume failed' "$T/f3.err" || fail "check 8: stderr lacks 'resume failed'"
+[[ $(wc -l <"$L/f3/turns.jsonl") -eq 1 ]] || fail "check 8: f3/turns.jsonl does not hold exactly one turn"
 
 echo "all checks passed"
