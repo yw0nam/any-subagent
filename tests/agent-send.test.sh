@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Stub-CLI tests for agent-send: first call, resume by name, stale session, codex, qwen, roles, work logs.
+# Stub-CLI tests for agent-send: first call, resume by name, stale session, codex, qwen,
+# roles, work logs, stopping a running turn.
 set -u
 
 # resolve the repo from this test's own path
@@ -19,13 +20,20 @@ fail() { # first failing check aborts the run
   exit 1
 }
 
-# stub claude: dead-id resumes fail like an expired session, the rest return fixed JSON
+# stub claude: dead-id resumes fail like an expired session, a SLOW turn hangs with a
+# descendant that ignores TERM, the rest return fixed JSON
 cat >"$T/bin/claude" <<STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >>'$T/calls.log'
 if [[ " \$* " == *' --resume dead-id '* ]]; then
   echo 'No conversation found' >&2
   exit 1
+fi
+if [[ " \$* " == *SLOW* ]]; then
+  ( trap '' TERM; sleep 30 ) &
+  echo \$! >'$T/slow.pid'
+  wait
+  exit 0
 fi
 echo '{"session_id":"claude-sid-1","result":"stub reply"}'
 STUB
@@ -57,6 +65,16 @@ printf '%s\n' '{"roles":{"impl":{"backend":"claude","model":"m1"}}}' >"$T/config
 
 run() { # every call happens in $T/work, stubs first on PATH
   (cd "$T/work" && PATH="$T/bin:$PATH" ANY_SUBAGENT_CONFIG="$T/config.json" "$AGENT_SEND" "$@")
+}
+
+bg_run() { # run in the background; exec so that $! is agent-send itself, not a wrapper
+  (cd "$T/work" && PATH="$T/bin:$PATH" ANY_SUBAGENT_CONFIG="$T/config.json" exec "$AGENT_SEND" "$@") >/dev/null 2>&1 &
+}
+
+wait_for() { # $1: file, $2: tenths of a second to wait for it to appear
+  local n=0
+  while [[ ! -f $1 && $n -lt $2 ]]; do sleep 0.1; n=$((n + 1)); done
+  [[ -f $1 ]]
 }
 
 # 1. first call creates the session
@@ -117,5 +135,40 @@ grep -q -- '-r qwen-sid-1' "$T/calls.log" || fail "check 7: calls.log has no '-r
 printf 'dead-id\n' >"$STATE/qwen-q2"
 err=$(run qwen q2 x 2>&1 >/dev/null) && fail "check 7: dead qwen session exited zero"
 grep -q 'resume failed' <<<"$err" || fail "check 7: stderr lacks 'resume failed'"
+
+# 8. a running turn can be stopped, refuses a second turn, and reports its status
+bg_run claude slow1 SLOW
+slow1=$!
+wait_for "$L/slow1/pid" 50 || fail "check 8: slow1/pid never appeared"
+out=$(run --status slow1) || fail "check 8: --status of a running session exited non-zero"
+[[ $out == running* ]] || fail "check 8: --status of a running session: $out"
+err=$(run claude slow1 again 2>&1 >/dev/null) && fail "check 8: a second turn on a running session exited zero"
+grep -q 'already running' <<<"$err" || fail "check 8: stderr lacks 'already running'"
+run --stop slow1 2>/dev/null || fail "check 8: --stop of a running session exited non-zero"
+wait "$slow1"
+rc=$?
+[[ $rc -eq 143 ]] || fail "check 8: the stopped agent-send exited $rc, expected 143"
+desc=$(cat "$T/slow.pid")
+kill -0 "$desc" 2>/dev/null && fail "check 8: the TERM-ignoring descendant $desc outlived --stop"
+
+# killing agent-send itself (a harness timeout) takes the backend's group with it
+bg_run claude slow2 SLOW
+slow2=$!
+wait_for "$L/slow2/pid" 50 || fail "check 8: slow2/pid never appeared"
+kill -TERM "$slow2"
+wait "$slow2"
+rc=$?
+[[ $rc -eq 143 ]] || fail "check 8: agent-send killed by TERM exited $rc, expected 143"
+desc=$(cat "$T/slow.pid")
+kill -0 "$desc" 2>/dev/null && fail "check 8: the descendant outlived agent-send"
+[[ -f $L/slow2/pid ]] && fail "check 8: slow2/pid outlived agent-send"
+
+jq -e '.exit == 143' <<<"$(tail -1 "$L/slow1/turns.jsonl")" >/dev/null ||
+  fail "check 8: the stopped turn is not recorded with exit 143: $(tail -1 "$L/slow1/turns.jsonl")"
+out=$(run --status slow1) || fail "check 8: --status of a stopped session exited non-zero"
+[[ $out == idle* ]] || fail "check 8: --status of a stopped session: $out"
+err=$(run --stop slow1 2>&1 >/dev/null) || fail "check 8: --stop of an idle session exited non-zero"
+grep -q 'not running' <<<"$err" || fail "check 8: stderr lacks 'not running'"
+run --status nosuch 2>/dev/null && fail "check 8: --status of an unknown session exited zero"
 
 echo "all checks passed"
