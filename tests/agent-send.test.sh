@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Stub-CLI tests for agent-send: first call, resume by name, stale session, codex, qwen,
-# roles, work logs, stopping a running turn.
+# roles, work logs, stopping a running turn, usage-limit fallback.
 set -u
 
 # resolve the repo from this test's own path
@@ -20,13 +20,21 @@ fail() { # first failing check aborts the run
   exit 1
 }
 
-# stub claude: dead-id resumes fail like an expired session, a SLOW turn hangs with a
-# descendant that ignores TERM, the rest return fixed JSON
+# a 400-character detail string proves the limit error is surfaced untruncated
+filler=$(head -c 400 /dev/zero | tr '\0' x)
+# stub claude: dead-id resumes fail like an expired session, --model lim1 hits a usage
+# limit, a SLOW turn hangs with a descendant that ignores TERM, the rest return fixed JSON
 cat >"$T/bin/claude" <<STUB
 #!/usr/bin/env bash
+# claude.calls counts invocations; calls.log lines are multi-line messages, not one per call
+printf 'call\n' >>'$T/claude.calls'
 printf '%s\n' "\$*" >>'$T/calls.log'
 if [[ " \$* " == *' --resume dead-id '* ]]; then
   echo 'No conversation found' >&2
+  exit 1
+fi
+if [[ " \$* " == *' --model lim1 '* ]]; then
+  echo '429: {"message":"Usage limit reached for 5 hour", "detail":"$filler"}' >&2
   exit 1
 fi
 if [[ " \$* " == *SLOW* ]]; then
@@ -61,7 +69,7 @@ echo '[{"type":"system","session_id":"qwen-sid-1"},{"type":"result","session_id"
 STUB
 chmod +x "$T/bin/claude" "$T/bin/codex" "$T/bin/qwen"
 
-printf '%s\n' '{"roles":{"impl":{"backend":"claude","model":"m1"}}}' >"$T/config.json"
+printf '%s\n' '{"roles":{"impl":{"backend":"claude","model":"m1"},"lim":{"backend":"claude","model":"lim1","fallback":"lim2"},"limnofb":{"backend":"claude","model":"lim1"}}}' >"$T/config.json"
 
 run() { # every call happens in $T/work, stubs first on PATH
   (cd "$T/work" && PATH="$T/bin:$PATH" ANY_SUBAGENT_CONFIG="$T/config.json" "$AGENT_SEND" "$@")
@@ -170,5 +178,25 @@ out=$(run --status slow1) || fail "check 8: --status of a stopped session exited
 err=$(run --stop slow1 2>&1 >/dev/null) || fail "check 8: --stop of an idle session exited non-zero"
 grep -q 'not running' <<<"$err" || fail "check 8: stderr lacks 'not running'"
 run --status nosuch 2>/dev/null && fail "check 8: --status of an unknown session exited zero"
+
+# 9. a usage-limited turn retries once on the role's fallback model; other failures never retry
+run lim f1 hi >"$T/f1.out" 2>"$T/f1.err" || fail "check 9: the fallback retry exited non-zero"
+[[ $(cat "$T/f1.out") == 'stub reply' ]] || fail "check 9: expected 'stub reply', got: $(cat "$T/f1.out")"
+grep -q -- '--model lim2' "$T/calls.log" || fail "check 9: calls.log has no '--model lim2'"
+grep -q 'usage limit' "$T/f1.err" || fail "check 9: stderr lacks 'usage limit'"
+grep -qF "$filler" "$T/f1.err" || fail "check 9: stderr lacks the full 400-character limit detail"
+[[ $(wc -l <"$L/f1/turns.jsonl") -eq 2 ]] || fail "check 9: f1/turns.jsonl does not hold exactly two turns"
+jq -e '.exit == 1' <<<"$(head -1 "$L/f1/turns.jsonl")" >/dev/null ||
+  fail "check 9: the limited turn is not recorded with exit 1: $(head -1 "$L/f1/turns.jsonl")"
+jq -e '.exit == 0 and .model == "lim2"' <<<"$(tail -1 "$L/f1/turns.jsonl")" >/dev/null ||
+  fail "check 9: the fallback turn is not recorded with exit 0 and model lim2: $(tail -1 "$L/f1/turns.jsonl")"
+n0=$(wc -l <"$T/claude.calls")
+run limnofb f2 hi >/dev/null 2>"$T/f2.err" && fail "check 9: a usage limit without a fallback exited zero"
+grep -q 'usage limit' "$T/f2.err" || fail "check 9: stderr lacks 'usage limit' without a fallback"
+[[ $(wc -l <"$T/claude.calls") -eq $((n0 + 1)) ]] || fail "check 9: a usage limit without a fallback retried"
+printf 'dead-id\n' >"$STATE/claude-f3"
+run lim f3 x >/dev/null 2>"$T/f3.err" && fail "check 9: a non-limit failure on a fallback role exited zero"
+grep -q 'resume failed' "$T/f3.err" || fail "check 9: stderr lacks 'resume failed'"
+[[ $(wc -l <"$L/f3/turns.jsonl") -eq 1 ]] || fail "check 9: f3/turns.jsonl does not hold exactly one turn"
 
 echo "all checks passed"
