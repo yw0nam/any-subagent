@@ -164,6 +164,7 @@ out=$(run --status slow1) || fail "check 7: --status of a stopped session exited
 err=$(run --stop slow1 2>&1 >/dev/null) || fail "check 7: --stop of an idle session exited non-zero"
 grep -q 'not running' <<<"$err" || fail "check 7: stderr lacks 'not running'"
 run --status nosuch 2>/dev/null && fail "check 7: --status of an unknown session exited zero"
+run --stop nosuch 2>/dev/null && fail "check 7: --stop of an unknown session exited zero"
 
 # 8. a usage-limited turn retries once on the role's fallback model; other failures never retry
 run lim f1 hi >"$T/f1.out" 2>"$T/f1.err" || fail "check 8: the fallback retry exited non-zero"
