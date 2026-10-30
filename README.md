@@ -99,8 +99,8 @@ is cooperative — it lands at the agent's next step boundary.
 Need it to stop now? `agent-send --stop <session>` kills the running turn's
 process group — the backend CLI and everything it spawned — and the stopped
 turn is recorded with exit 143. `agent-send --status <session>` prints
-`running` (with the pid and the last time the log moved) or `idle` (with the
-last turn's exit), without reading the backend's transcript. One turn runs per
+`running` (with the pid and the last time the session's log was written) or
+`idle` (with the last turn's exit), without reading the backend's transcript. One turn runs per
 session: a second message to a running session is refused.
 
 No MCP server, no daemon, no polling. `agent-send` maps each
@@ -198,9 +198,11 @@ For pi, the model string also carries the reasoning level as a suffix —
 `max`). agy picks it by model id instead (no `--effort`) — `gemini-3.8-flash-high`,
 straight from `agent-send --models agy`.
 A role may also set `"fallback"`: another model of the same backend. When a turn
-fails and its output reports a usage limit (`429`, `usage limit`, `rate limit`,
-`quota`, `too many requests`), agent-send prints the matching lines verbatim on
-stderr and retries the message once, in the same session, on the fallback:
+fails and an error line reports a usage limit (`429`, `usage limit`, `rate limit`,
+`limit reached`, `quota`, `too many requests`), agent-send prints the matching
+lines verbatim on stderr and retries the message once, in the same session, on
+the fallback. Only error lines count — plain-text CLI errors and the error
+fields of JSON events — so a tool output that mentions a quota never triggers it:
 
 ```json
 "impl": { "backend": "pi", "model": "zai/glm-5.3-flash", "fallback": "qwen-token-plan-individual/qwen3.8-flash" }
@@ -256,9 +258,13 @@ agent-send -m gpt-5.5 codex quickfix "..."
   process that exits when the reply is complete — background it and a harness
   that watches processes (Claude Code) wakes you up; one that doesn't (Codex)
   just polls the log. No hooks, no marker files.
-- **A turn is one process group.** Killing agent-send (a harness timeout, Ctrl-C)
-  or running `--stop` takes the backend CLI down with it, so nothing keeps
-  editing — or billing — after the caller has moved on.
+- **A turn is one process group.** `--stop`, or TERM, INT or HUP sent to
+  agent-send (a harness timeout, Ctrl-C), takes the backend CLI and everything
+  it spawned down with it, so nothing keeps editing — or billing — after the
+  caller has moved on. Whatever a turn leaves running in its group, even after
+  a successful turn, is drained and KILLed after 10 s. Two gaps remain: a
+  SIGKILL of agent-send itself leaves the turn running (`--stop` still reaches
+  it), and a process that moves to its own group (`setsid`) escapes the stop.
 
 ## Philosophy
 
