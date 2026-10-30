@@ -13,3 +13,10 @@ jobs:
       # jq and shellcheck ship with the runner image
       - run: shellcheck bin/agent-send install.sh tests/agent-send.test.sh
       - run: bash tests/agent-send.test.sh
+
+  # macOS ships bash 3.2 and BSD userland, the script's oldest target
+  test-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: /bin/bash tests/agent-send.test.sh
