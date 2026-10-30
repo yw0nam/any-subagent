@@ -560,16 +560,26 @@ run_turn() { # one turn with the current $model: launch, wait, record; leaves it
 }
 
 run_turn
-# a usage limit is the one failure worth retrying (once, on another model);
-# a stopped turn (143) is never one
-if [[ $rc -ne 0 && $rc -ne 143 ]] &&
-  matched=$(grep -h -iE '(^|[^0-9])429([^0-9]|$)|usage limit|rate.?limit|quota|too many requests' "$reply" "$errf"); then
-  echo "agent-send: $backend reported a usage limit on ${model:-default}:" >&2
-  printf '%s\n' "$matched" >&2
-  if [[ -n $fallback && $fallback != "$model" ]]; then
-    echo "agent-send: retrying once on fallback model $fallback" >&2
-    model=$fallback
-    run_turn
+# a usage limit is the one failure worth retrying (once, on another model); a
+# stopped turn (143) is never one. the event streams quote tool output, which
+# says quota or 429 all the time, so only the error channels are candidates:
+# plain-text lines and the error fields of the JSON lines
+if [[ $rc -ne 0 && $rc -ne 143 ]]; then
+  matched=$(
+    {
+      grep -hv '^[{[]' "$reply" "$errf"
+      grep -h '^{' "$reply" "$errf" |
+        jq -r 'select(type == "object") | (.error // empty | tostring), (.message.errorMessage? // empty), (select((.type? // "") | test("error|fail"; "i")) | tostring)' 2>/dev/null
+    } | grep -iE '(^|[^0-9])429([^0-9]|$)|usage limit|rate.?limit|limit reached|quota|too many requests'
+  )
+  if [[ -n $matched ]]; then
+    echo "agent-send: $backend reported a usage limit on ${model:-default}:" >&2
+    printf '%s\n' "$matched" >&2
+    if [[ -n $fallback && $fallback != "$model" ]]; then
+      echo "agent-send: retrying once on fallback model $fallback" >&2
+      model=$fallback
+      run_turn
+    fi
   fi
 fi
 cat "$reply"
