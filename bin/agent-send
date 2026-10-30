@@ -112,6 +112,10 @@ case "${1:-}" in
 --stop)
   s=${2:?--stop needs a session name}
   sdir="$log_dir/$s"
+  [[ -d $sdir ]] || {
+    echo "agent-send: no session '$s' in $log_dir" >&2
+    exit 1
+  }
   pid=$(turn_pid "$sdir") || {
     echo "agent-send: session '$s' is not running" >&2
     rm -f "$sdir/pid" # a stale pid file would only mislead the next --status
