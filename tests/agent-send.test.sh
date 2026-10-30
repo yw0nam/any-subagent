@@ -131,9 +131,13 @@ printf 'n1\n' >"$L/s9/notes.md"
 run --log s9 | grep -q 'n1' || fail "check 6: --log of a notes-only session lacks the notes"
 
 # 7. a running turn can be stopped, refuses a second turn, and reports its status
+# the stub registers its TERM-ignoring descendant in slow.pid: fresh per run, and
+# awaited, or the descendant assertions below could pass vacuously
+rm -f "$T/slow.pid"
 bg_run claude slow1 SLOW
 slow1=$!
 wait_for "$L/slow1/pid" 50 || fail "check 7: slow1/pid never appeared"
+wait_for "$T/slow.pid" 50 || fail "check 7: slow1's descendant never registered"
 out=$(run --status slow1) || fail "check 7: --status of a running session exited non-zero"
 [[ $out == running* ]] || fail "check 7: --status of a running session: $out"
 err=$(run claude slow1 again 2>&1 >/dev/null) && fail "check 7: a second turn on a running session exited zero"
@@ -146,9 +150,11 @@ desc=$(cat "$T/slow.pid")
 kill -0 "$desc" 2>/dev/null && fail "check 7: the TERM-ignoring descendant $desc outlived --stop"
 
 # killing agent-send itself (a harness timeout) takes the backend's group with it
+rm -f "$T/slow.pid"
 bg_run claude slow2 SLOW
 slow2=$!
 wait_for "$L/slow2/pid" 50 || fail "check 7: slow2/pid never appeared"
+wait_for "$T/slow.pid" 50 || fail "check 7: slow2's descendant never registered"
 kill -TERM "$slow2"
 wait "$slow2"
 rc=$?
