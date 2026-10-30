@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.3.0 — 2026-10-30
+
+- `agent-send --stop <session>` stops a running turn. Each turn runs in its
+  own process group; `--stop` sends TERM to the group, then KILL after 10 s,
+  and returns once the stopped turn is recorded in `turns.jsonl` (exit 143).
+  TERM, INT or HUP sent to agent-send (a harness timeout, Ctrl-C) also stops
+  the backend. A SIGKILL of agent-send does not; `--stop` still does. A
+  process that moves to its own group (`setsid`) escapes both.
+- After every turn, anything left running in the turn's process group is
+  drained and KILLed after 10 s.
+- `agent-send --status <session>` prints `running` with the pid, start time
+  and the last write to the session's log, or `idle` with the last turn's number, time and exit.
+- One turn per session: a message to a session that is still running is
+  refused with "already running".
+- opencode turns run with `--standalone`: a private server per turn, so no
+  session keeps working after its turn ends.
+- A role may set `"fallback"`, another model of the same backend. A failed
+  turn whose error lines report a usage limit is retried once, in the same
+  session, on the fallback. Only plain-text lines and the error fields of JSON
+  events are matched, never tool output. The matching lines are printed verbatim on stderr,
+  with or without a fallback.
+- Removed the `qwen` (Qwen Code) backend added in 2.2.0. Its headless output
+  was cut at 64 KB inside the sandbox, so long turns lost their report and
+  session id. Reach Qwen models through pi instead (a `qwen-token-plan-*`
+  provider). Roles with `"backend": "qwen"` now fail with "unsupported backend".
+
 ## 2.2.0 — 2026-10-30
 
 - New backend: `qwen` (Qwen Code). `agent-send` runs it with

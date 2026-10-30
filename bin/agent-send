@@ -6,7 +6,7 @@
 set -uo pipefail
 
 CONFIG="${ANY_SUBAGENT_CONFIG:-$HOME/.config/any-subagent/config.json}"
-BACKENDS="codex opencode claude pi agy qwen"
+BACKENDS="codex opencode claude pi agy"
 
 usage() {
   cat >&2 <<EOF
@@ -16,6 +16,8 @@ usage: agent-send [-m MODEL] <role|backend> <session-name> <message...>
        agent-send --models [backend]
        agent-send --log <session-name>
        agent-send --note <session-name> <text...>
+       agent-send --status <session-name>
+       agent-send --stop <session-name>
 backends: $BACKENDS   roles: defined in $CONFIG
   -m        model override (passed to the backend's model flag)
   --list    list sessions for the current directory
@@ -25,6 +27,8 @@ backends: $BACKENDS   roles: defined in $CONFIG
             the notes the agent kept on its reasoning
   --note    drop an amendment into a running session's inbox; the agent picks
             it up at its next step boundary
+  --status  report whether a session is running or idle, and when it last moved
+  --stop    stop a running turn: kill its process group and record the turn
 EOF
   exit 2
 }
@@ -33,6 +37,18 @@ state_dir="/tmp/any-subagent/$(pwd -P | sha1sum | cut -c1-12)"
 # Work logs live in the tree the agent works on (worktrees isolate themselves),
 # not in state_dir: the point is that they are readable next to the diff.
 log_dir="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)/.any-subagent"
+
+# A bare kill -0 also matches an unrelated process that reused the pid, so a
+# live turn is one that is alive and still an agent-send.
+turn_pid() { # $1: session dir — prints the pid of the turn running in it
+  local d=$1 p
+  [[ -f $d/pid ]] || return 1
+  p=$(cat "$d/pid" 2>/dev/null)
+  [[ -n $p ]] || return 1
+  kill -0 "$p" 2>/dev/null || return 1
+  [[ $(ps -o command= -p "$p" 2>/dev/null) == *agent-send* ]] || return 1
+  printf '%s\n' "$p"
+}
 
 case "${1:-}" in
 --note)
@@ -70,6 +86,64 @@ case "${1:-}" in
   fi
   exit 0
   ;;
+--status)
+  s=${2:?--status needs a session name}
+  sdir="$log_dir/$s"
+  [[ -d $sdir ]] || {
+    echo "agent-send: no session '$s' in $log_dir" >&2
+    exit 1
+  }
+  if pid=$(turn_pid "$sdir"); then
+    # last activity: whichever log file moved most recently
+    newest=$sdir/pid
+    for f in "$sdir/notes.md" "$sdir/turns.jsonl"; do
+      [[ -f $f && $(date -r "$f" +%s) -gt $(date -r "$newest" +%s) ]] && newest=$f
+    done
+    echo "running — pid $pid, started $(date -r "$sdir/pid" -Iseconds), last activity $(date -r "$newest" -Iseconds)"
+    exit 0
+  fi
+  if [[ -s $sdir/turns.jsonl ]]; then
+    tail -1 "$sdir/turns.jsonl" | jq -r '"idle — last turn \(.turn) at \(.ts), exit \(.exit)"'
+  else
+    echo "idle — no turns"
+  fi
+  exit 0
+  ;;
+--stop)
+  s=${2:?--stop needs a session name}
+  sdir="$log_dir/$s"
+  [[ -d $sdir ]] || {
+    echo "agent-send: no session '$s' in $log_dir" >&2
+    exit 1
+  }
+  pid=$(turn_pid "$sdir") || {
+    echo "agent-send: session '$s' is not running" >&2
+    rm -f "$sdir/pid" # a stale pid file would only mislead the next --status
+    exit 0
+  }
+  # The turn owns a process group, so one signal reaches the backend CLI and
+  # everything it spawned: TERM first, KILL for whatever ignored it.
+  kill -TERM -- "-$pid" 2>/dev/null
+  n=0
+  while kill -0 -- "-$pid" 2>/dev/null && [[ $n -lt 50 ]]; do
+    sleep 0.2
+    n=$((n + 1))
+  done
+  kill -0 -- "-$pid" 2>/dev/null && kill -KILL -- "-$pid" 2>/dev/null
+  # agent-send removes the pid file only after the stopped turn is recorded, so
+  # its disappearance is the acknowledgement that the log is complete.
+  n=0
+  while [[ -f $sdir/pid && $n -lt 75 ]]; do
+    sleep 0.2
+    n=$((n + 1))
+  done
+  [[ -f $sdir/pid ]] && {
+    echo "agent-send: session '$s' stopped, but its turn record is not confirmed" >&2
+    exit 1
+  }
+  echo "agent-send: stopped session '$s'" >&2
+  exit 0
+  ;;
 --list)
   ls -1 "$state_dir" 2>/dev/null
   exit 0
@@ -89,8 +163,6 @@ case "${1:-}" in
     claude) echo "no list command; aliases always resolve to the latest model: opus, sonnet, haiku (full ids like claude-opus-4-8 also accepted)" ;;
     pi) pi --list-models 2>/dev/null ;;
     agy) agy models 2>/dev/null | grep -v '^Fetching' ;;
-    # no list command; the models are whatever the user configured as providers
-    qwen) jq -r '.modelProviders[]?[]?.id' ~/.qwen/settings.json 2>/dev/null ;;
     esac
     echo
   done
@@ -98,7 +170,7 @@ case "${1:-}" in
   ;;
 esac
 
-model="" role=""
+model="" role="" fallback=""
 while [[ "${1:-}" == -* ]]; do
   case "$1" in
   -m) model="${2:?-m needs a value}"; shift 2 ;;
@@ -128,6 +200,7 @@ else
     exit 1
   }
   [[ -n $model ]] || model=$(jq -r --arg r "$target" '.roles[$r].model // empty' "$CONFIG")
+  fallback=$(jq -r --arg r "$target" '.roles[$r].fallback // empty' "$CONFIG")
   role=$target
 fi
 
@@ -156,6 +229,12 @@ mkdir -p "$sdir"
 # the directory ignores itself: work logs are scratch next to the diff, not
 # repo content the user has to notice and clean out of `git status`
 [[ -f $log_dir/.gitignore ]] || printf '*\n' >"$log_dir/.gitignore"
+# One turn per session dir: two would interleave in turns.jsonl and fight over
+# the same backend session id.
+if p=$(turn_pid "$sdir"); then
+  echo "agent-send: session '$name' is already running (pid $p); stop it with agent-send --stop $name" >&2
+  exit 1
+fi
 # Delegated agents keep the long story in the worktree and hand back only the
 # summary — otherwise every delegation dumps a transcript into the
 # orchestrator's context, and the reasoning is lost the moment it scrolls.
@@ -185,308 +264,332 @@ assumptions, rejected alternatives worth knowing, follow-ups, blockers, or
 ## Log
 $notes"
 
-SECONDS=0
 reply=$(mktemp)
-# a subshell, not $( ): bash 3.2 (macOS /bin/bash) misparses case inside
-# command substitution. Each branch's exit leaves only the subshell, so the
-# turn is recorded whatever the outcome.
-(
-case "$backend" in
-codex)
-  # --json: the human-readable banner ("session id: ...") is not a stable
-  # contract — a CLI update can add a warning line, recolor, or reword it
-  # and silently break extraction after a successful, billable run. The
-  # JSONL event stream's thread_id field is the documented, structured id.
-  flags=(--skip-git-repo-check --json)
-  # -c, not -s: the same flags array feeds both `codex exec` and `codex exec
-  # resume`, and resume rejects -s/--sandbox ("unexpected argument '-s'").
-  # The config override is accepted by both. (--full-auto is deprecated.)
-  # network_access: without it the sandbox blocks socket(), so asyncio can't
-  # build its self-pipe and starlette's TestClient hangs forever — pytest
-  # suites stall instead of failing. Scoped to delegated sessions; the user's
-  # own codex keeps its default posture.
-  flags+=(-c sandbox_mode="workspace-write" -c sandbox_workspace_write.network_access=true)
-  # The sandbox root is cwd, but in a linked worktree (or any subdirectory of a
-  # repo) the real git dir lives outside it, so every git write dies with
-  # "Read-only file system". codex then asks to escalate, and `exec` has nobody
-  # to answer — the agent reports it simply cannot use git.
-  # A linked worktree's own git dir (.git/worktrees/<name>, where index.lock
-  # lives) needs its own entry: codex keeps the dir a `.git` file points to
-  # read-only unless that exact path is a writable root.
-  gd=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
-  ad=$(git rev-parse --absolute-git-dir 2>/dev/null)
-  roots=()
-  [[ -n $gd && $gd != "$(pwd -P)"/* ]] && roots+=("\"$gd\"")
-  [[ -n $ad && $ad != "$gd" && $ad != "$(pwd -P)"/* ]] && roots+=("\"$ad\"")
-  ((${#roots[@]})) &&
-    flags+=(-c "sandbox_workspace_write.writable_roots=[$(IFS=,; echo "${roots[*]}")]")
-  [[ -n $model ]] && flags+=(-m "$model")
-  # </dev/null: codex exec waits for stdin EOF; a backgrounded caller's open
-  # stdin pipe never sends one, hanging codex before its first turn.
-  if [[ -f $sf ]]; then
-    out=$(codex exec resume "$(cat "$sf")" "${flags[@]}" "$msg" </dev/null 2>&1) || {
+errf=$(mktemp) # the turn's stderr, captured so a usage limit printed there can be matched
+pid="" signalled=0
+# A harness timeout that kills agent-send must not orphan the backend: forward
+# the signal to the whole group and stay alive to record the turn. The trap is
+# installed before launch, and idle while $pid is empty, so no signal is lost
+# in the window between spawning the turn and knowing its pid.
+trap 'signalled=1; [[ -z $pid ]] || kill -TERM -- "-$pid" 2>/dev/null' TERM INT HUP
+
+run_turn() { # one turn with the current $model: launch, wait, record; leaves its exit in rc
+  SECONDS=0
+  # a subshell, not $( ): bash 3.2 (macOS /bin/bash) misparses case inside
+  # command substitution. Each branch's exit leaves only the subshell, so the
+  # turn is recorded whatever the outcome.
+  # Job control puts the turn in its own process group (id = pid), which is what
+  # lets --stop reach the backend CLI and everything it spawned. </dev/null: with
+  # job control on, bash no longer hands a background job /dev/null as stdin.
+  set -m
+  (
+  set +m # no job control inside the turn: the branches' own & jobs stay in its group
+  case "$backend" in
+  codex)
+    # --json: the human-readable banner ("session id: ...") is not a stable
+    # contract — a CLI update can add a warning line, recolor, or reword it
+    # and silently break extraction after a successful, billable run. The
+    # JSONL event stream's thread_id field is the documented, structured id.
+    flags=(--skip-git-repo-check --json)
+    # -c, not -s: the same flags array feeds both `codex exec` and `codex exec
+    # resume`, and resume rejects -s/--sandbox ("unexpected argument '-s'").
+    # The config override is accepted by both. (--full-auto is deprecated.)
+    # network_access: without it the sandbox blocks socket(), so asyncio can't
+    # build its self-pipe and starlette's TestClient hangs forever — pytest
+    # suites stall instead of failing. Scoped to delegated sessions; the user's
+    # own codex keeps its default posture.
+    flags+=(-c sandbox_mode="workspace-write" -c sandbox_workspace_write.network_access=true)
+    # The sandbox root is cwd, but in a linked worktree (or any subdirectory of a
+    # repo) the real git dir lives outside it, so every git write dies with
+    # "Read-only file system". codex then asks to escalate, and `exec` has nobody
+    # to answer — the agent reports it simply cannot use git.
+    # A linked worktree's own git dir (.git/worktrees/<name>, where index.lock
+    # lives) needs its own entry: codex keeps the dir a `.git` file points to
+    # read-only unless that exact path is a writable root.
+    gd=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+    ad=$(git rev-parse --absolute-git-dir 2>/dev/null)
+    roots=()
+    [[ -n $gd && $gd != "$(pwd -P)"/* ]] && roots+=("\"$gd\"")
+    [[ -n $ad && $ad != "$gd" && $ad != "$(pwd -P)"/* ]] && roots+=("\"$ad\"")
+    ((${#roots[@]})) &&
+      flags+=(-c "sandbox_workspace_write.writable_roots=[$(IFS=,; echo "${roots[*]}")]")
+    [[ -n $model ]] && flags+=(-m "$model")
+    # </dev/null: codex exec waits for stdin EOF; a backgrounded caller's open
+    # stdin pipe never sends one, hanging codex before its first turn.
+    if [[ -f $sf ]]; then
+      out=$(codex exec resume "$(cat "$sf")" "${flags[@]}" "$msg" </dev/null 2>&1) || {
+        printf '%s\n' "$out"
+        die_stale
+      }
+    else
+      # Run in the background and poll for the thread_id as soon as it
+      # appears instead of waiting for the whole command to finish, so a
+      # long task killed by an external timeout (e.g. the harness's default
+      # 2min Bash timeout when not backgrounded) stays resumable instead of
+      # being silently orphaned (see the same fix applied to opencode below).
+      tmp_out=$(mktemp)
+      codex exec "${flags[@]}" "$msg" </dev/null >"$tmp_out" 2>&1 &
+      pid=$!
+      id=""
+      while kill -0 "$pid" 2>/dev/null; do
+        id=$(sed -n 's/.*"thread_id":"\([^"]*\)".*/\1/p' "$tmp_out" | head -1)
+        [[ -n $id ]] && break
+        sleep 0.3
+      done
+      [[ -n $id ]] && printf '%s\n' "$id" >"$sf"
+      wait "$pid"
+      rc=$?
+      out=$(<"$tmp_out")
+      rm -f "$tmp_out"
+      [[ $rc -eq 0 ]] || {
+        printf '%s\n' "$out"
+        exit "$rc"
+      }
+      [[ -n $id ]] || id=$(sed -n 's/.*"thread_id":"\([^"]*\)".*/\1/p' <<<"$out" | head -1)
+      [[ -n $id ]] || {
+        printf '%s\n' "$out"
+        echo "agent-send: could not extract codex session id" >&2
+        exit 1
+      }
+      printf '%s\n' "$id" >"$sf"
+    fi
+    # keep only the final assistant message from the JSONL event stream: codex
+    # emits an agent_message for every preamble it narrates between tool calls,
+    # and only the last one is the report. grep isolates real event lines first
+    # since codex prepends plain-text notices (e.g. "Reading additional input
+    # from stdin...") that aren't JSON
+    grep '^{' <<<"$out" |
+      jq -rs '[.[] | select(.type == "item.completed" and .item.type == "agent_message") | .item.text] | last // empty' 2>/dev/null ||
       printf '%s\n' "$out"
-      die_stale
-    }
-  else
-    # Run in the background and poll for the thread_id as soon as it
-    # appears instead of waiting for the whole command to finish, so a
-    # long task killed by an external timeout (e.g. the harness's default
-    # 2min Bash timeout when not backgrounded) stays resumable instead of
-    # being silently orphaned (see the same fix applied to opencode above).
-    tmp_out=$(mktemp)
-    codex exec "${flags[@]}" "$msg" </dev/null >"$tmp_out" 2>&1 &
-    pid=$!
-    id=""
-    while kill -0 "$pid" 2>/dev/null; do
-      id=$(sed -n 's/.*"thread_id":"\([^"]*\)".*/\1/p' "$tmp_out" | head -1)
-      [[ -n $id ]] && break
-      sleep 0.3
-    done
-    [[ -n $id ]] && printf '%s\n' "$id" >"$sf"
-    wait "$pid"
+    ;;
+  opencode)
+    flags=(--format json)
+    flags+=(--auto)
+    # --standalone ties the server to this turn, so --stop ends the work too
+    flags+=(--standalone)
+    [[ -n $model ]] && flags+=(-m "$model")
+    if [[ -f $sf ]]; then
+      # opencode v2 creates a session for an unknown --session id and exits 0 —
+      # the silent context loss agent-send exists to prevent. export fails fast
+      # on a missing id, so check before the turn instead of after it.
+      opencode session export "$(cat "$sf")" >/dev/null || die_stale
+      # </dev/null: opencode run reads stdin to EOF when it is not a TTY, and a
+      # backgrounded caller's open pipe never sends one — the turn hangs before
+      # the prompt reaches the server. The new-session branch below sets
+      # </dev/null explicitly too.
+      out=$(opencode run "${flags[@]}" --session "$(cat "$sf")" "$msg" </dev/null 2>&1) || {
+        printf '%s\n' "$out"
+        die_stale
+      }
+    else
+      # Run in the background and poll for the sessionID as soon as it appears
+      # (it's in the first JSON event, within ~1s) instead of waiting for the
+      # whole command to finish. A long task killed by an external timeout
+      # (e.g. the harness's default 2min Bash timeout when not backgrounded)
+      # would otherwise leave the session fully untracked: opencode keeps
+      # running/burns tokens, but agent-send never learns its id and the next
+      # call starts a brand-new session instead of resuming.
+      tmp_out=$(mktemp)
+      opencode run "${flags[@]}" "$msg" </dev/null >"$tmp_out" 2>&1 &
+      pid=$!
+      id=""
+      while kill -0 "$pid" 2>/dev/null; do
+        id=$(sed -n 's/.*"sessionID":"\([^"]*\)".*/\1/p' "$tmp_out" | head -1)
+        [[ -n $id ]] && break
+        sleep 0.3
+      done
+      [[ -n $id ]] && printf '%s\n' "$id" >"$sf"
+      wait "$pid"
+      rc=$?
+      out=$(<"$tmp_out")
+      rm -f "$tmp_out"
+      [[ $rc -eq 0 ]] || {
+        printf '%s\n' "$out"
+        exit "$rc"
+      }
+      [[ -n $id ]] || id=$(sed -n 's/.*"sessionID":"\([^"]*\)".*/\1/p' <<<"$out" | head -1)
+      [[ -n $id ]] || {
+        printf '%s\n' "$out"
+        echo "agent-send: could not extract opencode session id" >&2
+        exit 1
+      }
+      printf '%s\n' "$id" >"$sf"
+    fi
+    # keep only assistant text from the JSON event stream
+    jq -rj 'select(.type == "text") | .part.text + "\n"' <<<"$out" 2>/dev/null ||
+      printf '%s\n' "$out"
+    ;;
+  claude)
+    flags=(-p --output-format json)
+    flags+=(--permission-mode acceptEdits)
+    [[ -n $model ]] && flags+=(--model "$model")
+    if [[ -f $sf ]]; then
+      out=$(claude "${flags[@]}" --resume "$(cat "$sf")" "$msg" 2>&1) || {
+        printf '%s\n' "$out"
+        die_stale
+      }
+    else
+      out=$(claude "${flags[@]}" "$msg" 2>&1)
+      rc=$?
+      [[ $rc -eq 0 ]] || {
+        printf '%s\n' "$out"
+        exit "$rc"
+      }
+    fi
+    id=$(jq -r '.session_id // empty' <<<"$out" 2>/dev/null)
+    if [[ -n $id ]]; then
+      printf '%s\n' "$id" >"$sf" # claude may rotate ids on resume; always store the latest
+    elif [[ ! -f $sf ]]; then
+      printf '%s\n' "$out"
+      echo "agent-send: could not extract claude session id" >&2
+      exit 1
+    fi
+    jq -r '.result' <<<"$out" 2>/dev/null || printf '%s\n' "$out"
+    ;;
+  pi)
+    # pi names its own sessions: --session-id creates the id if it does not exist
+    # and resumes it if it does, so there is no id to scrape and a run killed by
+    # a timeout can never be orphaned. Session storage is per-project (cwd), which
+    # already matches agent-send's (cwd, backend, name) key; the state file is
+    # written only so --list shows the session.
+    id="any-subagent-$name"
+    flags=(-p --mode json --session-id "$id")
+    [[ -n $model ]] && flags+=(--model "$model")
+    out=$(pi "${flags[@]}" "$msg" </dev/null 2>&1)
     rc=$?
-    out=$(<"$tmp_out")
-    rm -f "$tmp_out"
     [[ $rc -eq 0 ]] || {
       printf '%s\n' "$out"
       exit "$rc"
-    }
-    [[ -n $id ]] || id=$(sed -n 's/.*"thread_id":"\([^"]*\)".*/\1/p' <<<"$out" | head -1)
-    [[ -n $id ]] || {
-      printf '%s\n' "$out"
-      echo "agent-send: could not extract codex session id" >&2
-      exit 1
     }
     printf '%s\n' "$id" >"$sf"
-  fi
-  # keep only the final assistant message from the JSONL event stream: codex
-  # emits an agent_message for every preamble it narrates between tool calls,
-  # and only the last one is the report. grep isolates real event lines first
-  # since codex prepends plain-text notices (e.g. "Reading additional input
-  # from stdin...") that aren't JSON
-  grep '^{' <<<"$out" |
-    jq -rs '[.[] | select(.type == "item.completed" and .item.type == "agent_message") | .item.text] | last // empty' 2>/dev/null ||
-    printf '%s\n' "$out"
-  ;;
-opencode)
-  flags=(--format json)
-  flags+=(--auto)
-  [[ -n $model ]] && flags+=(-m "$model")
-  if [[ -f $sf ]]; then
-    # opencode v2 creates a session for an unknown --session id and exits 0 —
-    # the silent context loss agent-send exists to prevent. export fails fast
-    # on a missing id, so check before the turn instead of after it.
-    opencode session export "$(cat "$sf")" >/dev/null || die_stale
-    # </dev/null: opencode run reads stdin to EOF when it is not a TTY, and a
-    # backgrounded caller's open pipe never sends one — the turn hangs before
-    # the prompt reaches the server. The new-session branch below gets this
-    # for free from `&` (bash gives background jobs /dev/null as stdin).
-    out=$(opencode run "${flags[@]}" --session "$(cat "$sf")" "$msg" </dev/null 2>&1) || {
-      printf '%s\n' "$out"
-      die_stale
-    }
-  else
-    # Run in the background and poll for the sessionID as soon as it appears
-    # (it's in the first JSON event, within ~1s) instead of waiting for the
-    # whole command to finish. A long task killed by an external timeout
-    # (e.g. the harness's default 2min Bash timeout when not backgrounded)
-    # would otherwise leave the session fully untracked: opencode keeps
-    # running/burns tokens, but agent-send never learns its id and the next
-    # call starts a brand-new session instead of resuming.
-    tmp_out=$(mktemp)
-    opencode run "${flags[@]}" "$msg" </dev/null >"$tmp_out" 2>&1 &
-    pid=$!
-    id=""
-    while kill -0 "$pid" 2>/dev/null; do
-      id=$(sed -n 's/.*"sessionID":"\([^"]*\)".*/\1/p' "$tmp_out" | head -1)
-      [[ -n $id ]] && break
-      sleep 0.3
-    done
-    [[ -n $id ]] && printf '%s\n' "$id" >"$sf"
-    wait "$pid"
+    # keep only the last turn's assistant text — the earlier turns are the model
+    # narrating between tool calls, not the report; grep isolates the JSONL
+    # events from pi's plain-text notices (e.g. "creating a new session")
+    events=$(grep '^{' <<<"$out")
+    text=$(jq -rs '[.[] | select(.type == "turn_end")] | last // empty | [.message.content[]? | select(.type == "text") | .text] | join("\n")' <<<"$events" 2>/dev/null)
+    if [[ -n $text ]]; then
+      printf '%s\n' "$text"
+    else
+      # pi exits 0 even when the turn failed (unknown model, provider 400, auth):
+      # the reason lives in the event stream as stopReason "error", so without
+      # this the caller gets an empty success and no idea anything went wrong.
+      printf '%s\n' "$out" >&2
+      err=$(jq -r 'select(.type == "turn_end") | .message.errorMessage // empty' <<<"$events" 2>/dev/null | head -1)
+      echo "agent-send: pi returned no assistant text${err:+ — $err}" >&2
+      exit 1
+    fi
+    ;;
+  agy)
+    # Antigravity CLI. -p takes the prompt as its own value (a bare `-p` followed
+    # by a flag errors out), so the message is attached with `=`.
+    # Print mode soft-denies every tool not allow-listed in settings, and one
+    # denied shell command (even `date` for the log timestamp) ends the turn
+    # with no report. So: approve all tools, but run the terminal in agy's OS
+    # sandbox — the same posture as codex's workspace-write. No --add-dir for
+    # the log dir: agy then treats it as "the current directory" and writes the
+    # task's files there; the log at the repo root is reachable without it.
+    flags=(--output-format json --sandbox --dangerously-skip-permissions)
+    [[ -n $model ]] && flags+=(--model "$model")
+    [[ -f $sf ]] && flags+=(--conversation "$(cat "$sf")")
+    # ponytail: synchronous like claude — a run killed by an external timeout
+    # before the reply is orphaned; stream-json emits conversation_id early if
+    # that ever bites.
+    out=$(agy "${flags[@]}" -p="$msg" </dev/null 2>&1)
     rc=$?
-    out=$(<"$tmp_out")
-    rm -f "$tmp_out"
-    [[ $rc -eq 0 ]] || {
-      printf '%s\n' "$out"
-      exit "$rc"
-    }
-    [[ -n $id ]] || id=$(sed -n 's/.*"sessionID":"\([^"]*\)".*/\1/p' <<<"$out" | head -1)
-    [[ -n $id ]] || {
-      printf '%s\n' "$out"
-      echo "agent-send: could not extract opencode session id" >&2
+    # agy prints plain-text warnings next to the JSON envelope
+    res=$(grep '^{' <<<"$out" | tail -1)
+    id=$(jq -r '.conversation_id // empty' <<<"$res" 2>/dev/null)
+    if [[ -f $sf ]]; then
+      # an unknown --conversation only warns and starts a fresh one, exit 0 —
+      # the silent context loss agent-send exists to prevent
+      # ponytail: post-hoc — agy has no dry-run resume, so a dead id still costs
+      # one orphaned turn (and a stray log entry) before this fires.
+      # a failed run (quota, network) is not a dead id: keep the session file
+      [[ $rc -eq 0 ]] || {
+        printf '%s\n' "$out"
+        exit "$rc"
+      }
+      [[ $id == "$(cat "$sf")" ]] || {
+        printf '%s\n' "$out"
+        echo "agent-send: agy started a new conversation ${id:-?} instead — to keep its turn, write that id into $sf" >&2
+        die_stale
+      }
+    else
+      [[ $rc -eq 0 && -n $id ]] || {
+        printf '%s\n' "$out"
+        echo "agent-send: agy run failed or returned no conversation id" >&2
+        exit $((rc ? rc : 1))
+      }
+      printf '%s\n' "$id" >"$sf"
+    fi
+    # status SUCCESS is not enough: when a tool is soft-denied agy ends the turn
+    # with SUCCESS, an empty response and the reason in denied_actions/stderr
+    text=$(jq -r 'select(.status == "SUCCESS") | .response // empty' <<<"$res")
+    [[ -n $text ]] || {
+      printf '%s\n' "$out" >&2
+      echo "agent-send: agy returned no report — $(jq -r '[.status, (.error // empty | if type == "string" then . else tojson end), (.denied_actions // [] | map("denied " + .display_name) | .[])] | join(", ")' <<<"$res")" >&2
       exit 1
     }
-    printf '%s\n' "$id" >"$sf"
-  fi
-  # keep only assistant text from the JSON event stream
-  jq -rj 'select(.type == "text") | .part.text + "\n"' <<<"$out" 2>/dev/null ||
-    printf '%s\n' "$out"
-  ;;
-claude)
-  flags=(-p --output-format json)
-  flags+=(--permission-mode acceptEdits)
-  [[ -n $model ]] && flags+=(--model "$model")
-  if [[ -f $sf ]]; then
-    out=$(claude "${flags[@]}" --resume "$(cat "$sf")" "$msg" 2>&1) || {
-      printf '%s\n' "$out"
-      die_stale
-    }
-  else
-    out=$(claude "${flags[@]}" "$msg" 2>&1)
-    rc=$?
-    [[ $rc -eq 0 ]] || {
-      printf '%s\n' "$out"
-      exit "$rc"
-    }
-  fi
-  id=$(jq -r '.session_id // empty' <<<"$out" 2>/dev/null)
-  if [[ -n $id ]]; then
-    printf '%s\n' "$id" >"$sf" # claude may rotate ids on resume; always store the latest
-  elif [[ ! -f $sf ]]; then
-    printf '%s\n' "$out"
-    echo "agent-send: could not extract claude session id" >&2
-    exit 1
-  fi
-  jq -r '.result' <<<"$out" 2>/dev/null || printf '%s\n' "$out"
-  ;;
-pi)
-  # pi names its own sessions: --session-id creates the id if it does not exist
-  # and resumes it if it does, so there is no id to scrape and a run killed by
-  # a timeout can never be orphaned. Session storage is per-project (cwd), which
-  # already matches agent-send's (cwd, backend, name) key; the state file is
-  # written only so --list shows the session.
-  id="any-subagent-$name"
-  flags=(-p --mode json --session-id "$id")
-  [[ -n $model ]] && flags+=(--model "$model")
-  out=$(pi "${flags[@]}" "$msg" </dev/null 2>&1)
-  rc=$?
-  [[ $rc -eq 0 ]] || {
-    printf '%s\n' "$out"
-    exit "$rc"
-  }
-  printf '%s\n' "$id" >"$sf"
-  # keep only the last turn's assistant text — the earlier turns are the model
-  # narrating between tool calls, not the report; grep isolates the JSONL
-  # events from pi's plain-text notices (e.g. "creating a new session")
-  events=$(grep '^{' <<<"$out")
-  text=$(jq -rs '[.[] | select(.type == "turn_end")] | last // empty | [.message.content[]? | select(.type == "text") | .text] | join("\n")' <<<"$events" 2>/dev/null)
-  if [[ -n $text ]]; then
     printf '%s\n' "$text"
-  else
-    # pi exits 0 even when the turn failed (unknown model, provider 400, auth):
-    # the reason lives in the event stream as stopReason "error", so without
-    # this the caller gets an empty success and no idea anything went wrong.
-    printf '%s\n' "$out" >&2
-    err=$(jq -r 'select(.type == "turn_end") | .message.errorMessage // empty' <<<"$events" 2>/dev/null | head -1)
-    echo "agent-send: pi returned no assistant text${err:+ — $err}" >&2
-    exit 1
-  fi
-  ;;
-agy)
-  # Antigravity CLI. -p takes the prompt as its own value (a bare `-p` followed
-  # by a flag errors out), so the message is attached with `=`.
-  # Print mode soft-denies every tool not allow-listed in settings, and one
-  # denied shell command (even `date` for the log timestamp) ends the turn
-  # with no report. So: approve all tools, but run the terminal in agy's OS
-  # sandbox — the same posture as codex's workspace-write. No --add-dir for
-  # the log dir: agy then treats it as "the current directory" and writes the
-  # task's files there; the log at the repo root is reachable without it.
-  flags=(--output-format json --sandbox --dangerously-skip-permissions)
-  [[ -n $model ]] && flags+=(--model "$model")
-  [[ -f $sf ]] && flags+=(--conversation "$(cat "$sf")")
-  # ponytail: synchronous like claude — a run killed by an external timeout
-  # before the reply is orphaned; stream-json emits conversation_id early if
-  # that ever bites.
-  out=$(agy "${flags[@]}" -p="$msg" </dev/null 2>&1)
+    ;;
+  esac
+  ) </dev/null >"$reply" 2>"$errf" &
+  pid=$!
+  set +m
+  printf '%s\n' "$pid" >"$sdir/pid"
+  wait "$pid"
   rc=$?
-  # agy prints plain-text warnings next to the JSON envelope
-  res=$(grep '^{' <<<"$out" | tail -1)
-  id=$(jq -r '.conversation_id // empty' <<<"$res" 2>/dev/null)
-  if [[ -f $sf ]]; then
-    # an unknown --conversation only warns and starts a fresh one, exit 0 —
-    # the silent context loss agent-send exists to prevent
-    # ponytail: post-hoc — agy has no dry-run resume, so a dead id still costs
-    # one orphaned turn (and a stray log entry) before this fires.
-    # a failed run (quota, network) is not a dead id: keep the session file
-    [[ $rc -eq 0 ]] || {
-      printf '%s\n' "$out"
-      exit "$rc"
-    }
-    [[ $id == "$(cat "$sf")" ]] || {
-      printf '%s\n' "$out"
-      echo "agent-send: agy started a new conversation ${id:-?} instead — to keep its turn, write that id into $sf" >&2
-      die_stale
-    }
-  else
-    [[ $rc -eq 0 && -n $id ]] || {
-      printf '%s\n' "$out"
-      echo "agent-send: agy run failed or returned no conversation id" >&2
-      exit $((rc ? rc : 1))
-    }
-    printf '%s\n' "$id" >"$sf"
+  # drain the group before recording: anything the turn left in it — a descendant
+  # that ignored TERM, or an interrupted wait's still-live children — is waited
+  # for, and KILLed after 10 s. nothing keeps billing unseen.
+  n=0
+  while kill -0 -- "-$pid" 2>/dev/null; do
+    sleep 0.2
+    n=$((n + 1))
+    [[ $n -eq 50 ]] && kill -KILL -- "-$pid" 2>/dev/null
+  done
+  # 127 means "already reaped", not a status the turn ever returned
+  wait "$pid" 2>/dev/null
+  rc2=$?
+  [[ $rc2 -ne 127 ]] && rc=$rc2
+  # ponytail: written after the turn — only a SIGKILLed run leaves no line and a stray $reply
+  turn=$(($(cat "$sdir/turns.jsonl" 2>/dev/null | wc -l) + 1))
+  jq -nc --arg ts "$(date -Iseconds)" --argjson turn "$turn" --arg role "$role" \
+    --arg backend "$backend" --arg model "$model" --arg sid "$(cat "$sf" 2>/dev/null)" \
+    --arg spec "$spec" --rawfile report "$reply" --argjson exit "$rc" --argjson dur "$SECONDS" \
+    'def or_null: if . == "" then null else . end;
+    {ts: $ts, turn: $turn, role: ($role | or_null), backend: $backend, model: ($model | or_null),
+     session_id: ($sid | or_null), spec: $spec, report: $report, exit: $exit, duration_s: $dur}' \
+    >>"$sdir/turns.jsonl" ||
+    # warn only: the reply still reaches the caller, and a non-zero exit would invite a billable re-send
+    echo "agent-send: could not record this turn in $sdir/turns.jsonl" >&2
+  rm -f "$sdir/pid" # after the record: --stop reads this removal as confirmation
+  cat "$errf" >&2 # the turn's stderr belongs to the caller, verbatim
+}
+
+run_turn
+# a usage limit is the one failure worth retrying (once, on another model); a
+# stopped (143) or signalled turn is never one. the event streams quote tool
+# output, which says quota or 429 all the time, so only the error channels are
+# candidates: plain-text lines and the error fields of the JSON lines
+if [[ $rc -ne 0 && $rc -ne 143 && $signalled -eq 0 ]]; then
+  matched=$(
+    {
+      grep -hv '^[{[]' "$reply" "$errf"
+      grep -h '^{' "$reply" "$errf" |
+        jq -r 'select(type == "object") | (.error // empty | tostring), (.message.errorMessage? // empty), (select((.type? // "") | test("error|fail"; "i")) | tostring)' 2>/dev/null
+    } | grep -iE '(^|[^0-9])429([^0-9]|$)|usage limit|rate.?limit|limit reached|quota|too many requests'
+  )
+  if [[ -n $matched ]]; then
+    echo "agent-send: $backend reported a usage limit on ${model:-default}:" >&2
+    printf '%s\n' "$matched" >&2
+    if [[ -n $fallback && $fallback != "$model" ]]; then
+      echo "agent-send: retrying once on fallback model $fallback" >&2
+      model=$fallback
+      run_turn
+    fi
   fi
-  # status SUCCESS is not enough: when a tool is soft-denied agy ends the turn
-  # with SUCCESS, an empty response and the reason in denied_actions/stderr
-  text=$(jq -r 'select(.status == "SUCCESS") | .response // empty' <<<"$res")
-  [[ -n $text ]] || {
-    printf '%s\n' "$out" >&2
-    echo "agent-send: agy returned no report — $(jq -r '[.status, (.error // empty | if type == "string" then . else tojson end), (.denied_actions // [] | map("denied " + .display_name) | .[])] | join(", ")' <<<"$res")" >&2
-    exit 1
-  }
-  printf '%s\n' "$text"
-  ;;
-qwen)
-  # Qwen Code. Headless runs drop the shell tool unless approval is yolo (auto
-  # and auto-edit leave the agent unable to run tests), so: approve all tools,
-  # but run the whole CLI in its sandbox — the same posture as agy.
-  # ponytail: --sandbox is sandbox-exec on macOS; Linux needs docker or podman.
-  flags=(-o json --yolo --sandbox)
-  [[ -n $model ]] && flags+=(-m "$model")
-  [[ -f $sf ]] && flags+=(-r "$(cat "$sf")")
-  # ponytail: synchronous like claude — a run killed by an external timeout
-  # before the reply is orphaned; -o stream-json emits session_id early.
-  # </dev/null: qwen appends stdin to the prompt and waits for its EOF.
-  out=$(qwen "${flags[@]}" "$msg" </dev/null 2>&1)
-  rc=$?
-  # -o json prints one array of events; the sandbox can add plain-text lines
-  events=$(grep '^\[' <<<"$out" | tail -1)
-  if [[ $rc -ne 0 ]]; then
-    printf '%s\n' "$out"
-    # an unknown -r id exits 1 with "No saved session found"
-    [[ -f $sf ]] && die_stale
-    exit "$rc"
-  fi
-  id=$(jq -r '.[0].session_id // empty' <<<"$events" 2>/dev/null)
-  [[ -n $id ]] || {
-    printf '%s\n' "$out"
-    echo "agent-send: could not extract qwen session id" >&2
-    exit 1
-  }
-  printf '%s\n' "$id" >"$sf"
-  text=$(jq -r '.[] | select(.type == "result" and (.is_error | not)) | .result // empty' <<<"$events")
-  [[ -n $text ]] || {
-    printf '%s\n' "$out" >&2
-    echo "agent-send: qwen returned no report" >&2
-    exit 1
-  }
-  printf '%s\n' "$text"
-  ;;
-esac
-) >"$reply"
-rc=$?
-# ponytail: written after the turn — a run killed by an external timeout leaves no line and a stray $reply
-turn=$(($(cat "$sdir/turns.jsonl" 2>/dev/null | wc -l) + 1))
-jq -nc --arg ts "$(date -Iseconds)" --argjson turn "$turn" --arg role "$role" \
-  --arg backend "$backend" --arg model "$model" --arg sid "$(cat "$sf" 2>/dev/null)" \
-  --arg spec "$spec" --rawfile report "$reply" --argjson exit "$rc" --argjson dur "$SECONDS" \
-  'def or_null: if . == "" then null else . end;
-  {ts: $ts, turn: $turn, role: ($role | or_null), backend: $backend, model: ($model | or_null),
-   session_id: ($sid | or_null), spec: $spec, report: $report, exit: $exit, duration_s: $dur}' \
-  >>"$sdir/turns.jsonl" ||
-  # warn only: the reply still reaches the caller, and a non-zero exit would invite a billable re-send
-  echo "agent-send: could not record this turn in $sdir/turns.jsonl" >&2
+fi
 cat "$reply"
-rm -f "$reply"
+rm -f "$reply" "$errf"
 exit "$rc"
