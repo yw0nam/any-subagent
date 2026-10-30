@@ -283,7 +283,7 @@ run_turn() { # one turn with the current $model: launch, wait, record; leaves it
   # job control on, bash no longer hands a background job /dev/null as stdin.
   set -m
   (
-  set +m # inherited job control would put the branches' own jobs outside the group
+  set +m # no job control inside the turn: the branches' own & jobs stay in its group
   case "$backend" in
   codex)
     # --json: the human-readable banner ("session id: ...") is not a stable
@@ -326,7 +326,7 @@ run_turn() { # one turn with the current $model: launch, wait, record; leaves it
       # appears instead of waiting for the whole command to finish, so a
       # long task killed by an external timeout (e.g. the harness's default
       # 2min Bash timeout when not backgrounded) stays resumable instead of
-      # being silently orphaned (see the same fix applied to opencode above).
+      # being silently orphaned (see the same fix applied to opencode below).
       tmp_out=$(mktemp)
       codex exec "${flags[@]}" "$msg" </dev/null >"$tmp_out" 2>&1 &
       pid=$!
@@ -375,8 +375,8 @@ run_turn() { # one turn with the current $model: launch, wait, record; leaves it
       opencode session export "$(cat "$sf")" >/dev/null || die_stale
       # </dev/null: opencode run reads stdin to EOF when it is not a TTY, and a
       # backgrounded caller's open pipe never sends one — the turn hangs before
-      # the prompt reaches the server. The new-session branch below gets this
-      # for free from `&` (bash gives background jobs /dev/null as stdin).
+      # the prompt reaches the server. The new-session branch below sets
+      # </dev/null explicitly too.
       out=$(opencode run "${flags[@]}" --session "$(cat "$sf")" "$msg" </dev/null 2>&1) || {
         printf '%s\n' "$out"
         die_stale
@@ -539,8 +539,9 @@ run_turn() { # one turn with the current $model: launch, wait, record; leaves it
   printf '%s\n' "$pid" >"$sdir/pid"
   wait "$pid"
   rc=$?
-  # An interrupted wait reports 143 while a descendant that ignored TERM is still
-  # alive, so drain the group before recording: nothing keeps billing unseen.
+  # drain the group before recording: anything the turn left in it — a descendant
+  # that ignored TERM, or an interrupted wait's still-live children — is waited
+  # for, and KILLed after 10 s. nothing keeps billing unseen.
   n=0
   while kill -0 -- "-$pid" 2>/dev/null; do
     sleep 0.2
@@ -551,7 +552,7 @@ run_turn() { # one turn with the current $model: launch, wait, record; leaves it
   wait "$pid" 2>/dev/null
   rc2=$?
   [[ $rc2 -ne 127 ]] && rc=$rc2
-  # ponytail: written after the turn — a run killed by an external timeout leaves no line and a stray $reply
+  # ponytail: written after the turn — only a SIGKILLed run leaves no line and a stray $reply
   turn=$(($(cat "$sdir/turns.jsonl" 2>/dev/null | wc -l) + 1))
   jq -nc --arg ts "$(date -Iseconds)" --argjson turn "$turn" --arg role "$role" \
     --arg backend "$backend" --arg model "$model" --arg sid "$(cat "$sf" 2>/dev/null)" \
