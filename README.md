@@ -75,9 +75,9 @@ are free-form names you define once, per user.
 |---|---|
 | `skills/any-subagent/` | The skill: `SKILL.md` routes to `workflows/setup.md` (config interview) or `workflows/delegate.md` (cycle, quick reference, common mistakes) |
 | `<repo>/.any-subagent/<session>/` | Per-session work log: `turns.jsonl` (one line per message, written by agent-send: spec, report, role, backend, model, exit code, duration), `notes.md` (the agent's reasoning) and `inbox.md`; read it back with `agent-send --log <session>` |
-| `bin/agent-send` | ~450-line bash wrapper; Claude Code puts it on the Bash tool's PATH automatically, elsewhere `install.sh` links it |
+| `bin/agent-send` | ~600-line bash wrapper; Claude Code puts it on the Bash tool's PATH automatically, elsewhere `install.sh` links it |
 | `install.sh` | Links `agent-send` onto PATH (and the skill into `~/.codex/skills` for a plain git clone) — needed by every harness except Claude Code |
-| `tests/agent-send.test.sh` | Runs `agent-send` against stub `claude` and `codex` CLIs: session create, resume by name, loud failure on an expired session, roles, per-session work logs. CI runs it with shellcheck |
+| `tests/agent-send.test.sh` | Runs `agent-send` against stub `claude` and `codex` CLIs: session create, resume by name, loud failure on an expired session, roles, per-session work logs, `--stop`/`--status`, usage-limit fallback. CI runs it with shellcheck on Linux, and on macOS `/bin/bash` 3.2 |
 | `docs/demo.tape` | Renders `docs/demo.gif` with [VHS](https://github.com/charmbracelet/vhs) inside Claude Code, against your `impl` and `impl2` roles |
 | `.claude-plugin/marketplace.json` | This repo doubles as its own plugin marketplace; Codex reads the same manifest |
 

@@ -33,6 +33,8 @@ to set up or change their roles.
    For pi, a reasoning level can be appended to the model —
    `"zai/glm-5.3-flash:high"` (off/minimal/low/medium/high/xhigh/max). agy
    picks it by model id instead (no `--effort`): `gemini-3.8-flash-high`.
+   For pi and agy, always name the level: a CLI's default can be its most
+   expensive one.
    A role may set `"fallback"` — another model of the same backend, used for one
    retry in the same session when a turn fails on a usage limit.
    Every role can write — the reporting protocol has each one journal to
