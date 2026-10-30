@@ -11,6 +11,8 @@
 | List live models per backend | `agent-send --models [backend]` |
 | Read a session's work log | `agent-send --log <session-name>` |
 | Amend a task already running | `agent-send --note <session-name> "..."` |
+| Is a session still working? | `agent-send --status <session-name>` |
+| Stop a running turn now | `agent-send --stop <session-name>` |
 | Bypass roles (escape hatch) | `agent-send [-m MODEL] <backend> <name> "..."` |
 
 - Model comes from the role; `-m` overrides per call. Every role can write.
@@ -68,7 +70,8 @@ file.
 | Situation | Do this |
 |---|---|
 | Spec changed, agent is mid-run | `--note`; it lands at the next step boundary |
-| Change must take effect now | Kill the run, then send the corrected spec to the SAME session — the id is on disk, so context up to the last completed turn survives |
+| Change must take effect now | `agent-send --stop <name>`, then send the corrected spec to the SAME session — the id is on disk, so context up to the last completed turn survives |
+| Task moves to another implementer | `agent-send --stop <name>` the previous session and confirm `agent-send --status <name>` says `idle` before the new one starts |
 | Turn already finished | Just send a normal follow-up message |
 
 Cooperative, not preemptive: a note arrives late if the agent is deep inside

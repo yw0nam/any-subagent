@@ -2,16 +2,15 @@
 
 ![CI](https://img.shields.io/github/actions/workflow/status/yw0nam/any-subagent/ci.yml?branch=main&style=flat-square&label=ci)
 ![License](https://img.shields.io/github/license/yw0nam/any-subagent.svg?style=flat-square)
-![Version](https://img.shields.io/badge/version-2.2.0-blue.svg?style=flat-square)
-![Backends](https://img.shields.io/badge/backends-codex%20%C2%B7%20opencode%20%C2%B7%20claude%20%C2%B7%20pi%20%C2%B7%20agy%20%C2%B7%20qwen-8A2BE2?style=flat-square)
+![Version](https://img.shields.io/badge/version-2.3.0-blue.svg?style=flat-square)
+![Backends](https://img.shields.io/badge/backends-codex%20%C2%B7%20opencode%20%C2%B7%20claude%20%C2%B7%20pi%20%C2%B7%20agy-8A2BE2?style=flat-square)
 ![Harness](https://img.shields.io/badge/harness-Claude%20Code%20%C2%B7%20Codex-2ea44f?style=flat-square)
 
 **Run other coding-agent CLIs as background subagents.** any-subagent lets
 your orchestrator — Claude Code or Codex — delegate work to
 [codex](https://github.com/openai/codex),
 [opencode](https://opencode.ai), [pi](https://github.com/earendil-works/pi),
-[agy](https://antigravity.google/docs/cli/using/) (Antigravity CLI),
-[qwen](https://github.com/QwenLM/qwen-code) (Qwen Code), or
+[agy](https://antigravity.google/docs/cli/using/) (Antigravity CLI), or
 another `claude` through **session-persistent, role-based conversations**. The
 orchestrator writes the spec, farms out execution, sends review feedback to
 the *same* conversation, and keeps the final quality gate.
@@ -97,6 +96,13 @@ amendment in the session's inbox; write roles re-read it between steps, apply
 it, and record it in their notes. The CLIs cannot be interrupted mid-turn, so this
 is cooperative — it lands at the agent's next step boundary.
 
+Need it to stop now? `agent-send --stop <session>` kills the running turn's
+process group — the backend CLI and everything it spawned — and the stopped
+turn is recorded with exit 143. `agent-send --status <session>` prints
+`running` (with the pid and the last time the log moved) or `idle` (with the
+last turn's exit), without reading the backend's transcript. One turn runs per
+session: a second message to a running session is refused.
+
 No MCP server, no daemon, no polling. `agent-send` maps each
 `(cwd, backend, session-name)` to the backend's native session id and resumes
 it — the CLIs themselves keep the real conversation history.
@@ -106,7 +112,7 @@ it — the CLIs themselves keep the real conversation history.
 - An orchestrator with a shell tool: [Claude Code](https://code.claude.com) v2.x+
   or [Codex](https://github.com/openai/codex) v0.154+
 - At least one backend installed and authenticated:
-  `codex` · `opencode` · `claude` · `pi` · `agy` · `qwen`
+  `codex` · `opencode` · `claude` · `pi` · `agy`
 - `jq` 1.6 or later
 
 ## Installation
@@ -157,7 +163,7 @@ sandbox_mode = "workspace-write"
 [sandbox_workspace_write]
 network_access = true
 # only the backends you delegate to
-writable_roots = ["~/.codex", "~/.claude", "~/.local/share/opencode", "~/.pi", "~/.gemini", "~/.qwen"]
+writable_roots = ["~/.codex", "~/.claude", "~/.local/share/opencode", "~/.pi", "~/.gemini"]
 ```
 
 and run `codex --profile any-subagent`. Claude Code needs no equivalent.
@@ -190,18 +196,25 @@ Role names are free-form. `model` is optional (backend default when omitted).
 For pi, the model string also carries the reasoning level as a suffix —
 `"zai/glm-5.3-flash:high"` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`,
 `max`). agy picks it by model id instead (no `--effort`) — `gemini-3.8-flash-high`,
-straight from `agent-send --models agy`. qwen takes the model ids configured
-in `~/.qwen/settings.json` (`modelProviders`), e.g. `qwen3.8-max`.
+straight from `agent-send --models agy`.
+A role may also set `"fallback"`: another model of the same backend. When a turn
+fails and its output reports a usage limit (`429`, `usage limit`, `rate limit`,
+`quota`, `too many requests`), agent-send prints the matching lines verbatim on
+stderr and retries the message once, in the same session, on the fallback:
+
+```json
+"impl": { "backend": "pi", "model": "zai/glm-5.3-flash", "fallback": "qwen-token-plan-individual/qwen3.8-flash" }
+```
+
 Every role can write, because every role journals its work to
 `.any-subagent/<session>/notes.md` — codex runs with sandbox `workspace-write`
 plus the repository's git dirs as writable roots (the common `.git` and, in
 a linked worktree, its own `.git/worktrees/<name>`), so it can commit from a
-worktree; opencode `--auto`, claude `--permission-mode acceptEdits`, pi with its
+worktree; opencode `--auto --standalone` (a private server per turn, so
+no work outlives it), claude `--permission-mode acceptEdits`, pi with its
 `edit`/`write` tools, agy with `--sandbox --dangerously-skip-permissions`
 (headless agy denies any tool not allow-listed, and one denied command ends
-the turn with no report; the sandbox confines its terminal instead), qwen
-with `--yolo --sandbox` (headless qwen drops its shell tool in every other
-approval mode; the sandbox is sandbox-exec on macOS, docker or podman on Linux). Scope a
+the turn with no report; the sandbox confines its terminal instead). Scope a
 role by the worktree you send it to, not by taking its tools away.
 
 ## Usage
@@ -220,6 +233,10 @@ agent-send impl parser "Tests fail: expected X got Y. Fix it."
 agent-send --roles     # configured roles
 agent-send --list      # sessions for this directory
 agent-send --models    # models each backend can use right now
+agent-send --status parser   # running or idle, and when it last moved
+
+# Stop a running turn (the backend CLI and everything it spawned)
+agent-send --stop parser
 
 # Escape hatch: bypass roles, talk to a backend directly
 agent-send -m gpt-5.5 codex quickfix "..."
@@ -239,6 +256,9 @@ agent-send -m gpt-5.5 codex quickfix "..."
   process that exits when the reply is complete — background it and a harness
   that watches processes (Claude Code) wakes you up; one that doesn't (Codex)
   just polls the log. No hooks, no marker files.
+- **A turn is one process group.** Killing agent-send (a harness timeout, Ctrl-C)
+  or running `--stop` takes the backend CLI down with it, so nothing keeps
+  editing — or billing — after the caller has moved on.
 
 ## Philosophy
 
