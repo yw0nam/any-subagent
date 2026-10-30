@@ -266,6 +266,12 @@ $notes"
 
 reply=$(mktemp)
 errf=$(mktemp) # the turn's stderr, captured so a usage limit printed there can be matched
+pid="" signalled=0
+# A harness timeout that kills agent-send must not orphan the backend: forward
+# the signal to the whole group and stay alive to record the turn. The trap is
+# installed before launch, and idle while $pid is empty, so no signal is lost
+# in the window between spawning the turn and knowing its pid.
+trap 'signalled=1; [[ -z $pid ]] || kill -TERM -- "-$pid" 2>/dev/null' TERM INT HUP
 
 run_turn() { # one turn with the current $model: launch, wait, record; leaves its exit in rc
   SECONDS=0
@@ -530,9 +536,6 @@ run_turn() { # one turn with the current $model: launch, wait, record; leaves it
   ) </dev/null >"$reply" 2>"$errf" &
   pid=$!
   set +m
-  # A harness timeout that kills agent-send must not orphan the backend: forward
-  # the signal to the whole group and stay alive to record the turn.
-  trap 'kill -TERM -- "-$pid" 2>/dev/null' TERM INT HUP
   printf '%s\n' "$pid" >"$sdir/pid"
   wait "$pid"
   rc=$?
@@ -565,10 +568,10 @@ run_turn() { # one turn with the current $model: launch, wait, record; leaves it
 
 run_turn
 # a usage limit is the one failure worth retrying (once, on another model); a
-# stopped turn (143) is never one. the event streams quote tool output, which
-# says quota or 429 all the time, so only the error channels are candidates:
-# plain-text lines and the error fields of the JSON lines
-if [[ $rc -ne 0 && $rc -ne 143 ]]; then
+# stopped (143) or signalled turn is never one. the event streams quote tool
+# output, which says quota or 429 all the time, so only the error channels are
+# candidates: plain-text lines and the error fields of the JSON lines
+if [[ $rc -ne 0 && $rc -ne 143 && $signalled -eq 0 ]]; then
   matched=$(
     {
       grep -hv '^[{[]' "$reply" "$errf"
