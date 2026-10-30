@@ -445,10 +445,16 @@ qwen)
   flags=(-o json --yolo --sandbox)
   [[ -n $model ]] && flags+=(-m "$model")
   [[ -f $sf ]] && flags+=(-r "$(cat "$sf")")
+  # The sandbox writes only under cwd, but a linked worktree's git dir lives
+  # outside it, so every commit dies on index.lock. Include the common git dir
+  # (it holds the worktree's own .git/worktrees/<name>).
+  gd=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+  [[ -n $gd && $gd != "$(pwd -P)"/* ]] && flags+=(--include-directories="$gd")
   # ponytail: synchronous like claude — a run killed by an external timeout
   # before the reply is orphaned; -o stream-json emits session_id early.
-  # </dev/null: qwen appends stdin to the prompt and waits for its EOF.
-  out=$(qwen "${flags[@]}" "$msg" </dev/null 2>&1)
+  # The message goes on stdin: when qwen relaunches itself inside the sandbox,
+  # the array flag above swallows a positional prompt.
+  out=$(qwen "${flags[@]}" <<<"$msg" 2>&1)
   rc=$?
   # -o json prints one array of events; the sandbox can add plain-text lines
   events=$(grep '^\[' <<<"$out" | tail -1)
