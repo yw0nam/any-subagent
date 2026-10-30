@@ -37,6 +37,12 @@ if [[ " \$* " == *' --model lim1 '* ]]; then
   echo '429: {"message":"Usage limit reached for 5 hour", "detail":"$filler"}' >&2
   exit 1
 fi
+if [[ " \$* " == *' --model noisy1 '* ]]; then
+  # a failed run whose JSON stream quotes a limit: tool output, not the CLI's own error
+  echo '{"type":"item.completed","item":{"type":"command_execution","aggregated_output":"raise QuotaExceeded  # line 429"}}'
+  echo 'stream disconnected'
+  exit 1
+fi
 if [[ " \$* " == *SLOW* ]]; then
   ( trap '' TERM; sleep 30 ) &
   echo \$! >'$T/slow.pid'
@@ -59,7 +65,7 @@ echo '{"type":"item.completed","item":{"type":"agent_message","text":"stub reply
 STUB
 chmod +x "$T/bin/claude" "$T/bin/codex"
 
-printf '%s\n' '{"roles":{"impl":{"backend":"claude","model":"m1"},"lim":{"backend":"claude","model":"lim1","fallback":"lim2"},"limnofb":{"backend":"claude","model":"lim1"}}}' >"$T/config.json"
+printf '%s\n' '{"roles":{"impl":{"backend":"claude","model":"m1"},"lim":{"backend":"claude","model":"lim1","fallback":"lim2"},"limnofb":{"backend":"claude","model":"lim1"},"noisy":{"backend":"claude","model":"noisy1","fallback":"noisy2"}}}' >"$T/config.json"
 
 run() { # every call happens in $T/work, stubs first on PATH
   (cd "$T/work" && PATH="$T/bin:$PATH" ANY_SUBAGENT_CONFIG="$T/config.json" "$AGENT_SEND" "$@")
@@ -178,5 +184,10 @@ printf 'dead-id\n' >"$STATE/claude-f3"
 run lim f3 x >/dev/null 2>"$T/f3.err" && fail "check 8: a non-limit failure on a fallback role exited zero"
 grep -q 'resume failed' "$T/f3.err" || fail "check 8: stderr lacks 'resume failed'"
 [[ $(wc -l <"$L/f3/turns.jsonl") -eq 1 ]] || fail "check 8: f3/turns.jsonl does not hold exactly one turn"
+# a limit string inside the JSON event stream is tool output, not an error: no retry
+n0=$(wc -l <"$T/claude.calls")
+run noisy f4 x >/dev/null 2>"$T/f4.err" && fail "check 8: a limit string in tool output retried the turn"
+[[ $(wc -l <"$T/claude.calls") -eq $((n0 + 1)) ]] || fail "check 8: limit-shaped tool output retried on the fallback"
+[[ $(wc -l <"$L/f4/turns.jsonl") -eq 1 ]] || fail "check 8: f4/turns.jsonl does not hold exactly one turn"
 
 echo "all checks passed"
