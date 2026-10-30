@@ -52,7 +52,7 @@ same shape a harness subagent hands back. So:
   `agent-send --log <name>` (every turn's spec and report, then the notes)
   when the summary is too thin to verify against — before re-asking the
   agent, which costs a turn.
-- Both files are append-only and per session, so a follow-up lands as a new
+- `turns.jsonl` and `notes.md` are append-only and per session, so a follow-up lands as a new
   turn in the same directory and the whole thread stays readable.
 - `.any-subagent/` ignores itself (a `.gitignore` holding `*`), so logs never
   show up in `git status`. `git add -f` if you want to keep one.

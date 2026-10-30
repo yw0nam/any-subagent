@@ -59,7 +59,7 @@ case "${1:-}" in
     exit 1
   }
   if [[ -f $sdir/turns.jsonl ]]; then
-    jq -r '"## turn \(.turn) — \(.ts) — \(.role // .backend) (\(.backend)\(if .model then " · " + .model else "" end)) — exit \(.exit), \(.duration_s)s\n### spec\n\(.spec)\n### report\n\(.report)"' "$sdir/turns.jsonl" || {
+    jq -r '"## turn \(.turn) — \(.ts) — \([.role, .backend, .model] | map(values) | join(" · ")) — exit \(.exit), \(.duration_s)s\n### spec\n\(.spec)\n### report\n\(.report)"' "$sdir/turns.jsonl" || {
       echo "agent-send: could not read $sdir/turns.jsonl" >&2
       exit 1
     }
@@ -438,18 +438,17 @@ agy)
 esac
 ) >"$reply"
 rc=$?
-# ponytail: recorded after the turn, so a run killed by an external timeout
-# leaves no line; the agent's notes.md still holds what it wrote by then.
-# A failed append only warns: the reply still reaches the caller, and a
-# non-zero exit would read as a failed turn and invite a billable re-send.
+# ponytail: written after the turn — a run killed by an external timeout leaves no line and a stray $reply
 turn=$(($(cat "$sdir/turns.jsonl" 2>/dev/null | wc -l) + 1))
 jq -nc --arg ts "$(date -Iseconds)" --argjson turn "$turn" --arg role "$role" \
   --arg backend "$backend" --arg model "$model" --arg sid "$(cat "$sf" 2>/dev/null)" \
   --arg spec "$spec" --rawfile report "$reply" --argjson exit "$rc" --argjson dur "$SECONDS" \
-  'def n: if . == "" then null else . end;
-  {ts: $ts, turn: $turn, role: ($role | n), backend: $backend, model: ($model | n),
-   session_id: ($sid | n), spec: $spec, report: $report, exit: $exit, duration_s: $dur}' \
-  >>"$sdir/turns.jsonl" || echo "agent-send: could not record this turn in $sdir/turns.jsonl" >&2
+  'def or_null: if . == "" then null else . end;
+  {ts: $ts, turn: $turn, role: ($role | or_null), backend: $backend, model: ($model | or_null),
+   session_id: ($sid | or_null), spec: $spec, report: $report, exit: $exit, duration_s: $dur}' \
+  >>"$sdir/turns.jsonl" ||
+  # warn only: the reply still reaches the caller, and a non-zero exit would invite a billable re-send
+  echo "agent-send: could not record this turn in $sdir/turns.jsonl" >&2
 cat "$reply"
 rm -f "$reply"
 exit "$rc"
