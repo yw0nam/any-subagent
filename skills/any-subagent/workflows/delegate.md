@@ -4,7 +4,7 @@
 
 | Action | Command |
 |---|---|
-| Send as a role | `agent-send <role> <session-name> "..."` |
+| Send as a role | `agent-send <role> <session-name> -f <brief.md>` |
 | Continue a conversation | same role/backend + same session name |
 | Show configured roles | `agent-send --roles` |
 | List sessions for this cwd | `agent-send --list` |
@@ -13,8 +13,10 @@
 | Amend a task already running | `agent-send --note <session-name> "..."` |
 | Is a session still working? | `agent-send --status <session-name>` |
 | Stop a running turn now | `agent-send --stop <session-name>` |
-| Bypass roles (escape hatch) | `agent-send [-m MODEL] <backend> <name> "..."` |
+| Bypass roles (escape hatch) | `agent-send [-m MODEL] <backend> <name> -f <brief.md>` |
 
+- Write the brief to a file and send it with `-f` (or pipe it to `-`): it reaches the
+  agent exactly as written, whereas a shell expands backticks and `$` inside double quotes.
 - Model comes from the role; `-m` overrides per call. Every role can write.
 - Sessions are isolated per working directory (worktrees auto-isolate).
 - Name sessions by unit of work: one session per review thread / impl task.
@@ -80,7 +82,7 @@ that cheap — wrong work gets reverted, not untangled.
 
 ## Standard Cycle
 
-1. Write the spec yourself.
+1. Write the spec yourself, to a file.
 2. Send it to your review role and fold in the feedback;
    re-ask in the SAME session until it passes.
 3. Delegate execution, in the background, in parallel.
