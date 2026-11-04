@@ -58,11 +58,11 @@ You just talk to your orchestrator. A typical session:
 The orchestrator, with this plugin enabled:
 
 1. Writes the spec itself, then sends it to your review role:
-   `agent-send spec-review tokenizer-spec "Review this spec: ..."`
+   `agent-send spec-review tokenizer-spec -f spec-review.md`
 2. Folds feedback in and re-asks **in the same session** until it passes —
    the reviewer remembers its previous objections.
-3. Delegates implementation and docs **in parallel, in the background**: `agent-send impl tokenizer "..."`,
-   `agent-send docs tokenizer-docs "..."`
+3. Delegates implementation and docs **in parallel, in the background**: `agent-send impl tokenizer -f impl.md`,
+   `agent-send docs tokenizer-docs -f docs.md`
 4. Runs the tests itself. On failure, sends the failing output back to the
    `impl` session — the agent that wrote the code debugs it with full context.
 
@@ -225,11 +225,14 @@ Mostly you don't touch `agent-send` yourself — the orchestrator drives it. The
 command, for when you do:
 
 ```bash
-# Send as a role; first call creates the session
-agent-send impl parser "Implement the tokenizer per /abs/path/SPEC.md ..."
+# Send as a role; first call creates the session. The brief comes from a file:
+# a shell expands backticks and $ inside double quotes, a file arrives as written
+agent-send impl parser -f brief.md
 
 # Follow-up to the SAME conversation: same role + same session name
-agent-send impl parser "Tests fail: expected X got Y. Fix it."
+agent-send impl parser -f feedback.md
+cat feedback.md | agent-send impl parser -   # stdin works too
+agent-send impl parser "Tests fail: expected X got Y. Fix it."   # short plain text
 
 # Introspection
 agent-send --roles     # configured roles

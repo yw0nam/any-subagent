@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # agent-send — session-persistent messaging to coding-agent CLIs.
-# Role-based: `agent-send <role> <session-name> <msg...>` resolves backend/model
-# from the config. Low-level: `agent-send [-m MODEL] <backend> <session-name> <msg...>`.
+# Role-based: `agent-send <role> <session-name> <msg...|-f FILE|->` resolves backend/model
+# from the config. Low-level: `agent-send [-m MODEL] <backend> <session-name> <msg...|-f FILE|->`.
 # Sessions are keyed by (cwd, backend, name); state is one file holding the session id.
 set -uo pipefail
 
@@ -11,15 +11,20 @@ BACKENDS="codex opencode claude pi agy"
 usage() {
   cat >&2 <<EOF
 usage: agent-send [-m MODEL] <role|backend> <session-name> <message...>
+       agent-send [-m MODEL] <role|backend> <session-name> -f <file>
+       <producer> | agent-send [-m MODEL] <role|backend> <session-name> -
        agent-send --list
        agent-send --roles
        agent-send --models [backend]
        agent-send --log <session-name>
-       agent-send --note <session-name> <text...>
+       agent-send --note <session-name> <text...|-f file|->
        agent-send --status <session-name>
        agent-send --stop <session-name>
 backends: $BACKENDS   roles: defined in $CONFIG
   -m        model override (passed to the backend's model flag)
+  -f FILE   read the message from FILE; a message as an argument is expanded by the
+            shell first, so a brief with backticks or \$ is best sent from a file
+  -         read the message from stdin (a quoted heredoc passes it through verbatim)
   --list    list sessions for the current directory
   --roles   show configured roles
   --models  list models currently available per backend (default: all installed)
@@ -50,6 +55,22 @@ turn_pid() { # $1: session dir — prints the pid of the turn running in it
   printf '%s\n' "$p"
 }
 
+# Sets msg from the arguments after the session name: `-f FILE`, a lone `-` (stdin),
+# or the words themselves. A file or stdin reaches the backend as written; trailing
+# newlines are dropped, as `$( )` does.
+read_msg() {
+  if [[ ${1:-} == -f ]]; then
+    [[ $# -eq 2 ]] || usage
+    [[ -r $2 ]] || { echo "agent-send: cannot read message file '$2'" >&2; exit 1; }
+    msg=$(cat -- "$2")
+  elif [[ $# -eq 1 && $1 == - ]]; then
+    msg=$(cat)
+  else
+    msg="$*"
+  fi
+  [[ -n $msg ]] || { echo "agent-send: empty message" >&2; exit 2; }
+}
+
 case "${1:-}" in
 --note)
   # Mid-run steering. The CLIs are one-shot in non-interactive mode — nothing
@@ -61,10 +82,10 @@ case "${1:-}" in
   # the run if you need the change to take effect now.
   n=${2:?--note needs a session name}
   shift 2
-  [[ $# -ge 1 ]] || usage
+  read_msg "$@"
   mkdir -p "$log_dir/$n"
   [[ -f $log_dir/.gitignore ]] || printf '*\n' >"$log_dir/.gitignore"
-  printf -- '- [%s] %s\n' "$(date -Iseconds)" "$*" >>"$log_dir/$n/inbox.md"
+  printf -- '- [%s] %s\n' "$(date -Iseconds)" "$msg" >>"$log_dir/$n/inbox.md"
   echo "agent-send: note queued in $log_dir/$n/inbox.md" >&2
   exit 0
   ;;
@@ -180,7 +201,7 @@ done
 [[ $# -ge 3 ]] || usage
 target=$1 name=$2
 shift 2
-msg="$*"
+read_msg "$@"
 
 if [[ " $BACKENDS " == *" $target "* ]]; then
   backend=$target

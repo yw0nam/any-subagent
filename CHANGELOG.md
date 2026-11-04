@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.4.0 — 2026-11-04
+
+- `agent-send <role> <session> -f <file>` reads the message from a file, and a
+  lone `-` reads it from stdin. The text reaches the agent as written; trailing
+  newlines are dropped. A message in double quotes is expanded by the shell
+  first, so backticks and `$( )` in a brief ran as commands or vanished.
+- `agent-send --note <session> -f <file>` and `--note <session> -` read the note
+  the same way.
+- An empty message (argument, file or stdin) exits 2 with "empty message".
+  An empty argument was sent as a turn before.
+- The docs show the file form for sending a brief.
+
 ## 2.3.0 — 2026-10-30
 
 - `agent-send --stop <session>` stops a running turn. Each turn runs in its
