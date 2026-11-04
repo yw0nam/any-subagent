@@ -197,4 +197,24 @@ run noisy f4 x >/dev/null 2>"$T/f4.err" && fail "check 8: a limit string in tool
 [[ $(wc -l <"$T/claude.calls") -eq $((n0 + 1)) ]] || fail "check 8: limit-shaped tool output retried on the fallback"
 [[ $(wc -l <"$L/f4/turns.jsonl") -eq 1 ]] || fail "check 8: f4/turns.jsonl does not hold exactly one turn"
 
+# 9. a brief comes from a file (-f) or stdin (-) as written; an empty one is refused
+# single quotes keep the shell from expanding the backticks and $( ) in the brief
+# shellcheck disable=SC2016
+brief='Fix `parse_args` in $(echo x) at $HOME/src.
+Second line with "quotes" and a backslash \\ end.'
+printf '%s\n' "$brief" >"$T/brief.md"
+run impl b1 -f "$T/brief.md" >/dev/null 2>&1 || fail "check 9: -f exited non-zero"
+[[ $(jq -j '.spec' "$L/b1/turns.jsonl") == "$brief" ]] ||
+  fail "check 9: -f spec is not the file's text: $(jq -j '.spec' "$L/b1/turns.jsonl")"
+run impl b2 - <"$T/brief.md" >/dev/null 2>&1 || fail "check 9: - exited non-zero"
+[[ $(jq -j '.spec' "$L/b2/turns.jsonl") == "$brief" ]] ||
+  fail "check 9: stdin spec is not the piped text: $(jq -j '.spec' "$L/b2/turns.jsonl")"
+run --note b3 -f "$T/brief.md" 2>/dev/null || fail "check 9: --note -f exited non-zero"
+grep -qF -- "$brief" "$L/b3/inbox.md" || fail "check 9: --note -f did not queue the file's text"
+: >"$T/empty.md"
+run impl b4 -f "$T/empty.md" >/dev/null 2>&1 && fail "check 9: an empty -f file exited zero"
+run impl b4 - </dev/null >/dev/null 2>&1 && fail "check 9: empty stdin exited zero"
+run impl b4 -f "$T/nosuch.md" >/dev/null 2>&1 && fail "check 9: a missing -f file exited zero"
+[[ -e $L/b4/turns.jsonl ]] && fail "check 9: a refused message still ran a turn"
+
 echo "all checks passed"
