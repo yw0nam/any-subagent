@@ -294,6 +294,19 @@ pid="" signalled=0
 # in the window between spawning the turn and knowing its pid.
 trap 'signalled=1; [[ -z $pid ]] || kill -TERM -- "-$pid" 2>/dev/null' TERM INT HUP
 
+# A failed opencode run's output is its whole JSON event stream (hundreds of KB of
+# steps and tool output). The reply gets the reason instead: the error events'
+# messages, opencode v2's `{"type":"error","error":{"type","message"}}`, and the
+# agent's last text. Output with no JSON lines (a crash, a bad flag) is already readable.
+opencode_failure() { # $1: the run's output
+  local events err text
+  events=$(grep '^{' <<<"$1")
+  [[ -n $events ]] || { printf '%s\n' "$1"; return; }
+  err=$(jq -r 'select(.error) | .error | "\(.type // .name // "error"): \(.message // .data.message // tostring)"' <<<"$events" 2>/dev/null | awk '!seen[$0]++')
+  text=$(jq -rs '[.[] | select(.type == "text") | .part.text] | last // empty' <<<"$events" 2>/dev/null)
+  printf 'agent-send: opencode run failed\nerror: %s\nlast agent text:\n%s\n' "${err:-none reported}" "${text:-none}"
+}
+
 run_turn() { # one turn with the current $model: launch, wait, record; leaves its exit in rc
   SECONDS=0
   # a subshell, not $( ): bash 3.2 (macOS /bin/bash) misparses case inside
@@ -399,7 +412,7 @@ run_turn() { # one turn with the current $model: launch, wait, record; leaves it
       # the prompt reaches the server. The new-session branch below sets
       # </dev/null explicitly too.
       out=$(opencode run "${flags[@]}" --session "$(cat "$sf")" "$msg" </dev/null 2>&1) || {
-        printf '%s\n' "$out"
+        opencode_failure "$out"
         die_stale
       }
     else
@@ -425,7 +438,7 @@ run_turn() { # one turn with the current $model: launch, wait, record; leaves it
       out=$(<"$tmp_out")
       rm -f "$tmp_out"
       [[ $rc -eq 0 ]] || {
-        printf '%s\n' "$out"
+        opencode_failure "$out"
         exit "$rc"
       }
       [[ -n $id ]] || id=$(sed -n 's/.*"sessionID":"\([^"]*\)".*/\1/p' <<<"$out" | head -1)
