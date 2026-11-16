@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.4.1 — 2026-11-16
+
+- A failed opencode run replies with its error messages and the agent's last
+  text. It replied with the raw JSON event stream before, in stdout and in the
+  `turns.jsonl` report.
+- The delegate workflow tells you to name the tools a role may use and what it
+  does when blocked.
+
 ## 2.4.0 — 2026-11-04
 
 - `agent-send <role> <session> -f <file>` reads the message from a file, and a
