@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Stub-CLI tests for agent-send: first call, resume by name, stale session, codex,
-# roles, work logs, stopping a running turn, usage-limit fallback.
+# roles, work logs, stopping a running turn, usage-limit fallback, briefs from a file,
+# an opencode failure reported as its reason instead of the raw event stream.
 set -u
 
 # resolve the repo from this test's own path
@@ -63,7 +64,18 @@ fi
 echo '{"type":"thread.started","thread_id":"codex-tid-1"}'
 echo '{"type":"item.completed","item":{"type":"agent_message","text":"stub reply"}}'
 STUB
-chmod +x "$T/bin/claude" "$T/bin/codex"
+# stub opencode: every run streams a tool call and the agent's text, then fails the way
+# opencode v2 does when an unattended run hits a prompt (an error event, exit 1)
+cat >"$T/bin/opencode" <<'STUB'
+#!/usr/bin/env bash
+[[ $1 == session ]] && exit 0 # `session export <id>`: the id is alive
+echo '{"type":"step_start","sessionID":"oc-sid-1","part":{"type":"step-start"}}'
+echo '{"type":"tool_use","sessionID":"oc-sid-1","part":{"type":"tool","tool":"read","state":{"status":"completed","output":"RAW-TOOL-OUTPUT"}}}'
+echo '{"type":"text","sessionID":"oc-sid-1","part":{"type":"text","text":"Searching the web for contour tools."}}'
+echo '{"type":"error","sessionID":"oc-sid-1","error":{"type":"unknown","message":"Cancelled a request for input this run cannot answer: Web Search"}}'
+exit 1
+STUB
+chmod +x "$T/bin/claude" "$T/bin/codex" "$T/bin/opencode"
 
 printf '%s\n' '{"roles":{"impl":{"backend":"claude","model":"m1"},"lim":{"backend":"claude","model":"lim1","fallback":"lim2"},"limnofb":{"backend":"claude","model":"lim1"},"noisy":{"backend":"claude","model":"noisy1","fallback":"noisy2"}}}' >"$T/config.json"
 
@@ -216,5 +228,20 @@ run impl b4 -f "$T/empty.md" >/dev/null 2>&1 && fail "check 9: an empty -f file 
 run impl b4 - </dev/null >/dev/null 2>&1 && fail "check 9: empty stdin exited zero"
 run impl b4 -f "$T/nosuch.md" >/dev/null 2>&1 && fail "check 9: a missing -f file exited zero"
 [[ -e $L/b4/turns.jsonl ]] && fail "check 9: a refused message still ran a turn"
+
+# 10. a failed opencode run reports its error and the agent's last text, not the event stream
+# the stub exits before agent-send polls its session id, so the resume turn is seeded
+for turn in new resume; do
+  [[ $turn == resume ]] && printf 'oc-sid-1\n' >"$STATE/opencode-oc1"
+  out=$(run opencode oc1 hi 2>"$T/oc1.err") && fail "check 10 ($turn): a failed opencode run exited zero"
+  grep -qF 'Cancelled a request for input this run cannot answer: Web Search' <<<"$out" ||
+    fail "check 10 ($turn): the reply lacks the error message: $out"
+  grep -qF 'Searching the web for contour tools.' <<<"$out" ||
+    fail "check 10 ($turn): the reply lacks the agent's last text: $out"
+  grep -qE '^\{|RAW-TOOL-OUTPUT' <<<"$out" && fail "check 10 ($turn): the reply holds the raw event stream: $out"
+  jq -e '.report | test("RAW-TOOL-OUTPUT") | not' <<<"$(tail -1 "$L/oc1/turns.jsonl")" >/dev/null ||
+    fail "check 10 ($turn): the turn record holds the raw event stream"
+done
+grep -q 'resume failed' "$T/oc1.err" || fail "check 10: a failed resume lacks 'resume failed'"
 
 echo "all checks passed"

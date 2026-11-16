@@ -91,7 +91,11 @@ that cheap — wrong work gets reverted, not untangled.
    session so the agent keeps its context.
 
 Prompts must be self-contained: absolute file paths, acceptance criteria,
-constraints. External agents see none of your conversation.
+constraints. External agents see none of your conversation. Also state:
+
+- which tools the agent may use. An unattended run cannot answer a permission
+  prompt (web search, for one): the request is cancelled and the turn fails.
+- what to do when blocked: clean up what it created, stop, and report the blocker.
 
 ## Common Mistakes
 
