@@ -254,13 +254,13 @@ ANY_SUBAGENT_DEPTH=1 ANY_SUBAGENT_DELEGATE=impl run impl n1 hi >/dev/null 2>"$T/
   fail "check 11: a nested call with nesting off exited zero"
 grep -q 'nested delegation is off' "$T/n.err" || fail "check 11: stderr lacks 'nested delegation is off'"
 grep -q -- '--- delegation ---' "$T/calls.log" && fail "check 11: nesting off, yet a brief offered delegation"
-jq '.nested = {enabled: true, max_depth: 2} | .roles.impl.delegate = ["impl"] |
+jq '.nested = {enabled: true, max_depth: 2} | .roles.impl.delegate = ["impl"] | .roles.impl.use = "routine coding" |
   .roles.lead = {backend: "codex", delegate: ["impl"]}' "$T/config.json" >"$T/c2.json" && mv "$T/c2.json" "$T/config.json"
 mkdir -p "$T/home/.claude"
 : >"$T/calls.log"
 HOME="$T/home" run lead n2 hi >/dev/null || fail "check 11: a depth-0 codex turn exited non-zero"
 grep -q -- '--- delegation ---' "$T/calls.log" || fail "check 11: a role with a delegate list was not offered delegation"
-grep -q -- '- impl: claude · m1' "$T/calls.log" || fail "check 11: the brief does not list the impl role"
+grep -q -- '- impl: claude · m1 — routine coding' "$T/calls.log" || fail "check 11: the brief does not list the impl role with its use"
 grep -q -- '- lim:' "$T/calls.log" && fail "check 11: the brief lists a role outside the delegate list"
 grep -qF "$T/home/.claude" "$T/calls.log" || fail "check 11: codex cannot write the nested CLI's state dir"
 run impl n3 hi >/dev/null || fail "check 11: a depth-0 claude turn exited non-zero"
