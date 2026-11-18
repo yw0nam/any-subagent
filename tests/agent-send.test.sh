@@ -2,7 +2,7 @@
 # Stub-CLI tests for agent-send: first call, resume by name, stale session, codex,
 # roles, work logs, stopping a running turn, usage-limit fallback, briefs from a file,
 # an opencode failure reported as its reason instead of the raw event stream, nested
-# delegation (roles, depth limit).
+# delegation (roles, depth limit), claude's permission mode.
 set -u
 
 # resolve the repo from this test's own path
@@ -282,5 +282,10 @@ ANY_SUBAGENT_DEPTH=2 ANY_SUBAGENT_DELEGATE=impl run impl n7 hi >/dev/null 2>"$T/
 grep -q 'depth limit' "$T/n.err" || fail "check 11: stderr lacks 'depth limit'"
 ANY_SUBAGENT_DEPTH=1 ANY_SUBAGENT_DELEGATE=impl run lim n8 hi >/dev/null 2>"$T/n.err" && fail "check 11: a role outside the delegate list exited zero"
 grep -q 'not in the delegate list' "$T/n.err" || fail "check 11: stderr lacks 'not in the delegate list'"
+
+# 12. a claude turn runs in auto permission mode: acceptEdits denied its shell, web search and outside reads
+: >"$T/calls.log"
+run claude a1 hi >/dev/null || fail "check 12: a claude turn exited non-zero"
+grep -q -- '--permission-mode auto' "$T/calls.log" || fail "check 12: claude was not started with --permission-mode auto"
 
 echo "all checks passed"
