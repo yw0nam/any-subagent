@@ -283,9 +283,10 @@ grep -q 'depth limit' "$T/n.err" || fail "check 11: stderr lacks 'depth limit'"
 ANY_SUBAGENT_DEPTH=1 ANY_SUBAGENT_DELEGATE=impl run lim n8 hi >/dev/null 2>"$T/n.err" && fail "check 11: a role outside the delegate list exited zero"
 grep -q 'not in the delegate list' "$T/n.err" || fail "check 11: stderr lacks 'not in the delegate list'"
 
-# 12. a claude turn runs in auto permission mode: acceptEdits denied its shell, web search and outside reads
+# 12. a claude turn skips permission checks: a headless turn cannot answer a permission prompt
 : >"$T/calls.log"
 run claude a1 hi >/dev/null || fail "check 12: a claude turn exited non-zero"
-grep -q -- '--permission-mode auto' "$T/calls.log" || fail "check 12: claude was not started with --permission-mode auto"
+grep -q -- '--dangerously-skip-permissions' "$T/calls.log" || fail "check 12: claude was not started with --dangerously-skip-permissions"
+grep -q -- '--permission-mode' "$T/calls.log" && fail "check 12: claude was still started with a --permission-mode"
 
 echo "all checks passed"
