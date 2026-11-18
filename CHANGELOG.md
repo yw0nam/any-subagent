@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.6.0 — 2026-11-18
+
+- claude roles run with `--dangerously-skip-permissions` instead of
+  `--permission-mode auto`. A headless turn cannot answer a permission prompt,
+  and auto mode's classifier could still deny a tool the turn needed.
+
 ## 2.5.0 — 2026-11-18
 
 - Nested delegation. With `"nested": {"enabled": true, "max_depth": 2}` in the

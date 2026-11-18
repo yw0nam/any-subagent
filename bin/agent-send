@@ -469,9 +469,9 @@ turn_opencode() {
 
 turn_claude() {
   flags=(-p --output-format json)
-  # auto: a classifier approves safe actions with no prompt. Under acceptEdits, -p denied
-  # every shell command, web search and read outside the cwd, since nobody can approve them.
-  flags+=(--permission-mode auto)
+  # a headless turn cannot answer a permission prompt: acceptEdits denied every shell
+  # command, web search and read outside the cwd, and auto mode's classifier can still deny
+  flags+=(--dangerously-skip-permissions)
   [[ -n $model ]] && flags+=(--model "$model")
   if [[ -f $sf ]]; then
     out=$(claude "${flags[@]}" --resume "$(cat "$sf")" "$msg" 2>&1) || {

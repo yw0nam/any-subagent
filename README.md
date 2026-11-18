@@ -213,8 +213,8 @@ Every role can write, because every role journals its work to
 plus the repository's git dirs as writable roots (the common `.git` and, in
 a linked worktree, its own `.git/worktrees/<name>`), so it can commit from a
 worktree; opencode `--auto --standalone` (a private server per turn, so
-no work outlives it), claude `--permission-mode auto` (a classifier
-approves safe actions and blocks risky ones, with no prompt), pi with its
+no work outlives it), claude `--dangerously-skip-permissions` (no
+permission checks: a headless turn cannot answer a prompt), pi with its
 `edit`/`write` tools, agy with `--sandbox --dangerously-skip-permissions`
 (headless agy denies any tool not allow-listed, and one denied command ends
 the turn with no report; the sandbox confines its terminal instead). Scope a
@@ -255,8 +255,7 @@ subtasks to other roles, including a `claude` role:
 This is a guardrail against runaway delegation, not a security boundary. An agent with
 a free shell can unset the variables or run a backend CLI directly. Only the sandbox
 blocks that: a codex agent cannot write another CLI's state dir unless it may
-delegate. A claude agent's commands pass claude's auto-mode classifier, which may or
-may not catch it. pi and opencode agents have no such check.
+delegate. claude, pi and opencode agents have no such check.
 
 ## Usage
 
