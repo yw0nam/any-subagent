@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Stub-CLI tests for agent-send: first call, resume by name, stale session, codex,
 # roles, work logs, stopping a running turn, usage-limit fallback, briefs from a file,
-# an opencode failure reported as its reason instead of the raw event stream.
+# an opencode failure reported as its reason instead of the raw event stream, nested
+# delegation (roles, depth limit).
 set -u
 
 # resolve the repo from this test's own path
@@ -29,6 +30,7 @@ cat >"$T/bin/claude" <<STUB
 #!/usr/bin/env bash
 # claude.calls counts invocations; calls.log lines are multi-line messages, not one per call
 printf 'call\n' >>'$T/claude.calls'
+printf '%s\n' "\${ANY_SUBAGENT_DEPTH:-}" >>'$T/claude.depth'
 printf '%s\n' "\$*" >>'$T/calls.log'
 if [[ " \$* " == *' --resume dead-id '* ]]; then
   echo 'No conversation found' >&2
@@ -243,5 +245,26 @@ for turn in new resume; do
     fail "check 10 ($turn): the turn record holds the raw event stream"
 done
 grep -q 'resume failed' "$T/oc1.err" || fail "check 10: a failed resume lacks 'resume failed'"
+
+# 11. nested delegation: off by default; on, a subagent gets its roles and depth, and the limit holds
+ANY_SUBAGENT_DEPTH=1 run impl n1 hi >/dev/null 2>"$T/n.err" && fail "check 11: a nested call with nesting off exited zero"
+grep -q 'nested delegation is off' "$T/n.err" || fail "check 11: stderr lacks 'nested delegation is off'"
+grep -q -- '--- delegation ---' "$T/calls.log" && fail "check 11: nesting off, yet a brief offered delegation"
+jq '. + {nested: {enabled: true, max_depth: 2, roles: ["impl"]}}' "$T/config.json" >"$T/c2.json" && mv "$T/c2.json" "$T/config.json"
+mkdir -p "$T/home/.claude"
+: >"$T/calls.log"
+HOME="$T/home" run codex n2 hi >/dev/null || fail "check 11: a depth-0 codex turn exited non-zero"
+grep -q -- '--- delegation ---' "$T/calls.log" || fail "check 11: a depth-1 agent was not offered delegation"
+grep -q -- '- impl: claude · m1' "$T/calls.log" || fail "check 11: the brief does not list the impl role"
+grep -q -- '- lim:' "$T/calls.log" && fail "check 11: the brief lists a role outside nested.roles"
+grep -qF "$T/home/.claude" "$T/calls.log" || fail "check 11: codex cannot write the nested CLI's state dir"
+: >"$T/calls.log"
+ANY_SUBAGENT_DEPTH=1 run impl n3 hi >/dev/null || fail "check 11: an allowed depth-1 call exited non-zero"
+[[ $(tail -1 "$T/claude.depth") == 2 ]] || fail "check 11: the depth-2 agent did not get ANY_SUBAGENT_DEPTH=2"
+grep -q -- '--- delegation ---' "$T/calls.log" && fail "check 11: an agent at max depth was offered delegation"
+ANY_SUBAGENT_DEPTH=2 run impl n4 hi >/dev/null 2>"$T/n.err" && fail "check 11: a call past max_depth exited zero"
+grep -q 'depth limit' "$T/n.err" || fail "check 11: stderr lacks 'depth limit'"
+ANY_SUBAGENT_DEPTH=1 run lim n5 hi >/dev/null 2>"$T/n.err" && fail "check 11: a role outside nested.roles exited zero"
+grep -q 'not in nested.roles' "$T/n.err" || fail "check 11: stderr lacks 'not in nested.roles'"
 
 echo "all checks passed"
