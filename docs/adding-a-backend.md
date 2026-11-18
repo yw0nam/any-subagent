@@ -8,7 +8,7 @@ CLI; the stub tests prove the wrapper, not the CLI.
 
 1. Add the name to `BACKENDS` and a branch to `--models` (a live list, or a line that
    says there is none). Add the CLI's session state dir to the list a delegating codex
-   agent gets as writable roots (the `may_delegate` loop in the codex branch).
+   agent gets as writable roots (the `$delegate` loop in the codex branch).
 2. Add the branch to the turn's `case`. It runs the CLI non-interactively, writes the
    session id to `$sf` as early as the CLI exposes it, prints
    only the final report on stdout, and exits non-zero when the turn produced no report.

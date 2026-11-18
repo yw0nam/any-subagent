@@ -74,7 +74,7 @@ are free-form names you define once, per user.
 | Component | What it does |
 |---|---|
 | `skills/any-subagent/` | The skill: `SKILL.md` routes to `workflows/setup.md` (config interview) or `workflows/delegate.md` (cycle, quick reference, common mistakes) |
-| `<repo>/.any-subagent/<session>/` | Per-session work log: `turns.jsonl` (one line per message, written by agent-send: spec, report, role, backend, model, exit code, duration), `notes.md` (the agent's reasoning) and `inbox.md`; read it back with `agent-send --log <session>` |
+| `<repo>/.any-subagent/<session>/` | Per-session work log: `turns.jsonl` (one line per message, written by agent-send: spec, report, role, backend, model, depth, parent, exit code, duration), `notes.md` (the agent's reasoning) and `inbox.md`; read it back with `agent-send --log <session>` |
 | `bin/agent-send` | ~600-line bash wrapper; Claude Code puts it on the Bash tool's PATH automatically, elsewhere `install.sh` links it |
 | `install.sh` | Links `agent-send` onto PATH (and the skill into `~/.codex/skills` for a plain git clone) — needed by every harness except Claude Code |
 | `tests/agent-send.test.sh` | Runs `agent-send` against stub `claude`, `codex` and `opencode` CLIs: session create, resume by name, loud failure on an expired session, roles, per-session work logs, `--stop`/`--status`, usage-limit fallback, briefs from a file, a failed opencode run reported as its error, nested delegation (roles, depth limit). CI runs it with shellcheck on Linux, and on macOS `/bin/bash` 3.2 |
@@ -222,26 +222,39 @@ role by the worktree you send it to, not by taking its tools away.
 ### Nested delegation
 
 Off by default: an agent agent-send started cannot call agent-send itself. Turn it
-on to let a strong orchestrating model (codex, opencode, pi) hand subtasks to other
-roles, including a `claude` role:
+on, and give a role a `delegate` list, to let a strong orchestrating model hand
+subtasks to other roles, including a `claude` role:
 
 ```json
 {
   "roles": {
-    "lead":    { "backend": "codex",  "model": "gpt-6.2-sol" },
+    "lead":    { "backend": "codex",  "model": "gpt-6.2-sol", "delegate": ["explore"] },
     "explore": { "backend": "claude", "model": "claude-haiku-5-5" }
   },
-  "nested": { "enabled": true, "max_depth": 2, "roles": ["explore"] }
+  "nested": { "enabled": true, "max_depth": 2 }
 }
 ```
 
-Each turn runs its agent with `ANY_SUBAGENT_DEPTH` set one above its caller's (your
-orchestrator is 0). An agent at depth `d` may call agent-send while `d < max_depth`
-(default 2) and only for a role in `nested.roles` (omit it to allow every role). With
-the config above: you → `lead` (depth 1, may delegate) → `explore` (depth 2, may not).
-An agent that may delegate is told so in its brief, with the roles it may use; a codex
-one also gets the other CLIs' state dirs (`~/.claude`, `~/.pi`, ...) as writable roots.
-Nested sessions log to the same `.any-subagent/` and are named `<parent>-<subtask>`.
+- A role calls only the roles in its own `delegate` list; a role without one cannot
+  delegate. `--delegate explore` or `--delegate none` narrows the list for one turn
+  and never widens it.
+- Each turn runs its agent with `ANY_SUBAGENT_DEPTH` one above its caller's (your
+  orchestrator is 0), `ANY_SUBAGENT_DELEGATE` (the roles it may call) and
+  `ANY_SUBAGENT_PARENT` (the calling session). An agent at depth `d` may call
+  agent-send while `d < max_depth` (default 2). With the config above: you → `lead`
+  (depth 1, may call `explore`) → `explore` (depth 2, may not delegate).
+- An agent that may delegate is told so in its brief, with its roles; a codex one
+  also gets the other CLIs' state dirs (`~/.claude`, `~/.pi`, ...) as writable roots.
+- Nested sessions log to the same `.any-subagent/` as `<parent>-<subtask>`, and every
+  turn records its `depth` and `parent` in `turns.jsonl`. A nested turn always has a
+  parent, so `jq 'select(.depth == 0)' .any-subagent/*/turns.jsonl` should list only
+  the turns you sent.
+
+This is a guardrail against runaway delegation, not a security boundary. An agent with
+a free shell can unset the variables or run a backend CLI directly. Only the sandbox
+blocks that: a codex agent cannot write another CLI's state dir unless it may
+delegate, and a claude agent under `acceptEdits` runs no shell command outside your
+allow list. pi and opencode agents have no such sandbox.
 
 ## Usage
 
