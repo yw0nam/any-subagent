@@ -17,7 +17,8 @@
   give the calling role a `delegate` list.
 - `turns.jsonl` records each turn's `depth` and `parent`.
 - A brief whose agent may delegate ends with a `--- delegation ---` section: the
-  command and the roles it may use.
+  command and the roles it may use, each with its `use` when the role sets one.
+- A role's `"use"` says what the role is for.
 - A codex agent that may delegate also gets `~/.codex`, `~/.claude`,
   `~/.local/share/opencode`, `~/.pi` and `~/.gemini` (those that exist) as
   writable roots, so the CLIs it starts can save their sessions.

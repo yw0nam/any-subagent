@@ -46,10 +46,12 @@ to set up or change their roles.
    until the user turns it on. Ask whether they want it: a strong orchestrating
    model (e.g. a codex role) can then hand subtasks to other roles. A `claude`
    role belongs here even under Claude Code: the codex agent cannot run claude
-   natively. Ask which roles each delegating role may call:
+   natively. Ask which roles each delegating role may call, and what each callable
+   role is for: its `use` is the only hint the delegating agent gets.
 
    ```json
-   "lead":   { "backend": "codex", "model": "gpt-6.2-sol", "delegate": ["explore"] },
+   "lead":    { "backend": "codex", "model": "gpt-6.2-sol", "delegate": ["explore"] },
+   "explore": { "backend": "claude", "model": "claude-haiku-5-5", "use": "repo search, docs" },
    ...
    "nested": { "enabled": true, "max_depth": 2 }
    ```

@@ -306,7 +306,7 @@ fi
 if [[ -n $delegate ]]; then
   delegate_roles=$(jq -r --arg d "$delegate" '($d | split(",")) as $l | .roles | to_entries[] |
     select(.key as $k | any($l[]; . == $k)) |
-    "- \(.key): \(.value.backend)\(if .value.model then " · " + .value.model else "" end)"' "$CONFIG")
+    "- \(.key): \(.value.backend)\(if .value.model then " · " + .value.model else "" end)\(if .value.use then " — " + .value.use else "" end)"' "$CONFIG")
   msg="$msg
 
 --- delegation ---

@@ -229,7 +229,7 @@ subtasks to other roles, including a `claude` role:
 {
   "roles": {
     "lead":    { "backend": "codex",  "model": "gpt-6.2-sol", "delegate": ["explore"] },
-    "explore": { "backend": "claude", "model": "claude-haiku-5-5" }
+    "explore": { "backend": "claude", "model": "claude-haiku-5-5", "use": "repo search, docs" }
   },
   "nested": { "enabled": true, "max_depth": 2 }
 }
@@ -243,7 +243,8 @@ subtasks to other roles, including a `claude` role:
   `ANY_SUBAGENT_PARENT` (the calling session). An agent at depth `d` may call
   agent-send while `d < max_depth` (default 2). With the config above: you → `lead`
   (depth 1, may call `explore`) → `explore` (depth 2, may not delegate).
-- An agent that may delegate is told so in its brief, with its roles; a codex one
+- An agent that may delegate is told so in its brief, with its roles and each role's
+  `use` (when to pick it; without one the agent sees only the name and model); a codex one
   also gets the other CLIs' state dirs (`~/.claude`, `~/.pi`, ...) as writable roots.
 - Nested sessions log to the same `.any-subagent/` as `<parent>-<subtask>`, and every
   turn records its `depth` and `parent` in `turns.jsonl`. A nested turn always has a
