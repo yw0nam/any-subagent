@@ -23,7 +23,10 @@
   `~/.local/share/opencode`, `~/.pi` and `~/.gemini` (those that exist) as
   writable roots, so the CLIs it starts can save their sessions.
 - The limit is a guardrail, not a security boundary: an agent with a free shell
-  (pi, opencode) can unset the variables or run a CLI directly.
+  (claude, pi, opencode) can unset the variables or run a CLI directly.
+- claude roles run with `--permission-mode auto` instead of `acceptEdits`.
+  Under `acceptEdits`, a headless turn was denied every shell command, web
+  search and file read outside its cwd.
 
 ## 2.4.1 — 2026-11-16
 

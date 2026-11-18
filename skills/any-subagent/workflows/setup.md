@@ -58,8 +58,8 @@ to set up or change their roles.
 
    `max_depth` (default 2) counts agents below the orchestrator: with 2, your
    role may delegate once and its sub-agent may not. A role without `delegate`
-   cannot delegate. Tell the user that a pi or opencode role can get around the
-   limit (no sandbox); give `delegate` to a codex role when that matters.
+   cannot delegate. Tell the user that a claude, pi or opencode role can get
+   around the limit (no OS sandbox); give `delegate` to a codex role when that matters.
 
 5. Smoke-test each role with a trivial prompt — some models still fail only
    at call time (e.g. ChatGPT-account codex rejects some catalog models with

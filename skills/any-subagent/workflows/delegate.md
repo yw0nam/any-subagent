@@ -107,8 +107,8 @@ turn. agent-send enforces it through `ANY_SUBAGENT_DEPTH` and
 `ANY_SUBAGENT_DELEGATE`: a call past `nested.max_depth` or to a role outside the
 list exits 1 before any turn. The sub-agent's sessions log to the same
 `.any-subagent/` as `<session>-<subtask>`, each turn with its `depth` and
-`parent`. It is a guardrail, not a sandbox: a pi or opencode agent can get around
-it. You still verify the final result.
+`parent`. It is a guardrail, not a sandbox: a claude, pi or opencode agent can get
+around it. You still verify the final result.
 
 ## Common Mistakes
 
