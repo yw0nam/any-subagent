@@ -13,6 +13,7 @@
 | Amend a task already running | `agent-send --note <session-name> "..."` |
 | Is a session still working? | `agent-send --status <session-name>` |
 | Stop a running turn now | `agent-send --stop <session-name>` |
+| Limit who the role may call this turn | `agent-send --delegate explore <role> <name> -f <brief.md>` (or `--delegate none`) |
 | Bypass roles (escape hatch) | `agent-send [-m MODEL] <backend> <name> -f <brief.md>` |
 
 - Write the brief to a file and send it with `-f` (or pipe it to `-`): it reaches the
@@ -36,7 +37,7 @@ Each session gets a directory, `<repo-root>/.any-subagent/<session-name>/`:
 
 | File | Written by | Holds |
 |---|---|---|
-| `turns.jsonl` | agent-send, once per message | `ts`, `turn`, `role`, `backend`, `model`, `session_id`, `spec` (the message you sent, verbatim), `report` (the reply), `exit`, `duration_s` |
+| `turns.jsonl` | agent-send, once per message | `ts`, `turn`, `role`, `backend`, `model`, `session_id`, `depth` (0 for your own turns), `parent` (the calling session, for a nested turn), `spec` (the message you sent, verbatim), `report` (the reply), `exit`, `duration_s` |
 | `notes.md` | the role | its reasoning: what it did, decisions, rejected alternatives, commands, anything unfinished |
 | `inbox.md` | `agent-send --note` | amendments not yet applied |
 
@@ -96,6 +97,18 @@ constraints. External agents see none of your conversation. Also state:
 - which tools the agent may use. An unattended run cannot answer a permission
   prompt (web search, for one): the request is cancelled and the turn fails.
 - what to do when blocked: clean up what it created, stop, and report the blocker.
+
+## Nested Delegation
+
+With `nested.enabled` in the config, the brief of a role that has a `delegate`
+list ends with a `--- delegation ---` section: the agent-send command and the
+roles it may call. `--delegate a,b` or `--delegate none` narrows that list for one
+turn. agent-send enforces it through `ANY_SUBAGENT_DEPTH` and
+`ANY_SUBAGENT_DELEGATE`: a call past `nested.max_depth` or to a role outside the
+list exits 1 before any turn. The sub-agent's sessions log to the same
+`.any-subagent/` as `<session>-<subtask>`, each turn with its `depth` and
+`parent`. It is a guardrail, not a sandbox: a pi or opencode agent can get around
+it. You still verify the final result.
 
 ## Common Mistakes
 

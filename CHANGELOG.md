@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.5.0 — 2026-11-18
+
+- Nested delegation. With `"nested": {"enabled": true, "max_depth": 2}` in the
+  config, an agent that agent-send started may call agent-send itself.
+  `max_depth` defaults to 2.
+- A role's `"delegate": [...]` lists the roles its agent may call. A role without
+  one cannot delegate.
+- `--delegate a,b` narrows that list for one turn; `--delegate none` empties it.
+  It never widens the list.
+- Each turn runs its agent with `ANY_SUBAGENT_DEPTH` (one above its caller's; the
+  orchestrator is 0), `ANY_SUBAGENT_DELEGATE` and `ANY_SUBAGENT_PARENT`.
+- A nested call exits 1 before any turn when nesting is off, when the caller's
+  depth reaches `max_depth`, or when its role is not in the caller's list.
+  Breaking: nested calls ran unchecked before. To keep one, enable `nested` and
+  give the calling role a `delegate` list.
+- `turns.jsonl` records each turn's `depth` and `parent`.
+- A brief whose agent may delegate ends with a `--- delegation ---` section: the
+  command and the roles it may use, each with its `use` when the role sets one.
+- A role's `"use"` says what the role is for.
+- A codex agent that may delegate also gets `~/.codex`, `~/.claude`,
+  `~/.local/share/opencode`, `~/.pi` and `~/.gemini` (those that exist) as
+  writable roots, so the CLIs it starts can save their sessions.
+- The limit is a guardrail, not a security boundary: an agent with a free shell
+  (pi, opencode) can unset the variables or run a CLI directly.
+
 ## 2.4.1 — 2026-11-16
 
 - A failed opencode run replies with its error messages and the agent's last

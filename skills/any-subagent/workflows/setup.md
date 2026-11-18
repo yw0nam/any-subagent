@@ -16,7 +16,8 @@ to set up or change their roles.
    which backend serves each role, model per role picked from the step-2 list
    (omit to use the CLI's own default).
    If a proposed role targets a model the current harness runs natively, steer
-   it to the harness's own subagent mechanism instead of configuring it here.
+   it to the harness's own subagent mechanism instead of configuring it here —
+   unless it exists for nested agents to call (see `nested` below).
 4. Write the config and confirm with `agent-send --roles`:
 
 ```json
@@ -40,6 +41,25 @@ to set up or change their roles.
    Every role can write — the reporting protocol has each one journal to
    `.any-subagent/<session>/notes.md`, which a read-only role could not do. Scope a
    role by the worktree you send it to, not by taking its tools away.
+
+   Nested delegation (an agent agent-send started calling agent-send) is off
+   until the user turns it on. Ask whether they want it: a strong orchestrating
+   model (e.g. a codex role) can then hand subtasks to other roles. A `claude`
+   role belongs here even under Claude Code: the codex agent cannot run claude
+   natively. Ask which roles each delegating role may call, and what each callable
+   role is for: its `use` is the only hint the delegating agent gets.
+
+   ```json
+   "lead":    { "backend": "codex", "model": "gpt-6.2-sol", "delegate": ["explore"] },
+   "explore": { "backend": "claude", "model": "claude-haiku-5-5", "use": "repo search, docs" },
+   ...
+   "nested": { "enabled": true, "max_depth": 2 }
+   ```
+
+   `max_depth` (default 2) counts agents below the orchestrator: with 2, your
+   role may delegate once and its sub-agent may not. A role without `delegate`
+   cannot delegate. Tell the user that a pi or opencode role can get around the
+   limit (no sandbox); give `delegate` to a codex role when that matters.
 
 5. Smoke-test each role with a trivial prompt — some models still fail only
    at call time (e.g. ChatGPT-account codex rejects some catalog models with
