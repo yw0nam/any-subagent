@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.5.0 — 2026-11-18
+
+- Nested delegation. A config `nested` key lets an agent that agent-send
+  started call agent-send itself: `"nested": {"enabled": true, "max_depth": 2,
+  "roles": [...]}`. `max_depth` defaults to 2; omitting `roles` allows every role.
+- Each turn runs its agent with `ANY_SUBAGENT_DEPTH` one above its caller's.
+  The orchestrator is 0.
+- A nested call exits 1 before any turn when nesting is off, when the caller's
+  depth reaches `max_depth`, or when its role is not in `nested.roles`.
+  Breaking: nested calls ran unchecked before. To keep them, set
+  `"nested": {"enabled": true}`.
+- A brief whose agent may delegate ends with a `--- delegation ---` section: the
+  command and the roles it may use.
+- A codex agent that may delegate also gets `~/.codex`, `~/.claude`,
+  `~/.local/share/opencode`, `~/.pi` and `~/.gemini` (those that exist) as
+  writable roots, so the CLIs it starts can save their sessions.
+
 ## 2.4.1 — 2026-11-16
 
 - A failed opencode run replies with its error messages and the agent's last

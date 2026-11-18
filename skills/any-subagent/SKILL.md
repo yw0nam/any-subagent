@@ -25,7 +25,8 @@ configured models — spawn your harness's own subagent instead. Native subagent
 skip the extra CLI spawn, share the harness (hooks, permissions, session
 resume), and cost nothing extra to wire. The same-vendor backend exists only as
 an escape hatch for the rare case that genuinely needs a detached external CLI
-session.
+session — or as a role in `nested.roles`, for a delegated agent of another vendor
+to call (see `nested` in [workflows/setup.md](workflows/setup.md)).
 
 ## Preflight
 

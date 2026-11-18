@@ -97,6 +97,15 @@ constraints. External agents see none of your conversation. Also state:
   prompt (web search, for one): the request is cancelled and the turn fails.
 - what to do when blocked: clean up what it created, stop, and report the blocker.
 
+## Nested Delegation
+
+With `nested.enabled` in the config, the brief of a role that may delegate ends
+with a `--- delegation ---` section: the agent-send command and the roles it may
+call. agent-send enforces it: `ANY_SUBAGENT_DEPTH` counts the levels, and a call
+past `nested.max_depth` or to a role outside `nested.roles` exits 1 before any turn.
+The sub-agent's sessions log to the same `.any-subagent/` as `<session>-<subtask>`,
+so `agent-send --log` reads them too. You still verify the final result.
+
 ## Common Mistakes
 
 | Mistake | Reality |
