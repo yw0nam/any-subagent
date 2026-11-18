@@ -1,0 +1,21 @@
+name: test-guard
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  test-guard:
+    name: test-guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history to diff against the PR base
+      - name: Source changes ship tests
+        env:
+          TEST_GUARD_SKIP: ${{ contains(github.event.pull_request.labels.*.name, 'skip-tests') && '1' || '' }}
+        run: bash scripts/ci/test-guard.sh "origin/${{ github.event.pull_request.base.ref }}"

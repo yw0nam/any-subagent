@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Decision issues
+    url: https://github.com/yw0nam/any-subagent/issues?q=label%3Adecision
+    about: Read the decisions that bear on your issue before opening it

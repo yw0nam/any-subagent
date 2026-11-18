@@ -1,0 +1,45 @@
+name: Bug
+description: Report a behavior defect
+title: "Bug: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: symptoms
+    attributes:
+      label: Symptoms
+      description: What is wrong.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      value: |
+        1.
+        2.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: "The `agent-send` command you ran, its stdout and stderr, and `agent-send --log <session>`. Paste the output."
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      value: |
+        - OS:
+        - bash version (`bash --version`):
+        - any-subagent version:
+        - backend CLI and version (e.g. `codex --version`):
+    validations:
+      required: true

@@ -1,0 +1,25 @@
+name: Decision
+description: An architecture or product decision, closed with the decision in its closing comment
+title: "Decision: "
+labels: ["decision"]
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: The problem, the constraints, and the evidence that bears on it.
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: Options
+      description: Each option considered, with how established products handle the same problem and the trade-offs.
+    validations:
+      required: true
+  - type: textarea
+    id: decision
+    attributes:
+      label: Decision
+      description: Leave this placeholder. The closing comment holds the decision in a `## Decision` section and a `## Consequences` section.
+      value: "_The closing comment holds the decision._"
