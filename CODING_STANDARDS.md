@@ -30,9 +30,12 @@ userland. Traps CI does not always catch:
 
 ## Compatibility
 
-A change that drops or replaces a flag, config key, backend or log format deletes the
-old path outright, with no compat layer, fallback, warning or migration code. CHANGELOG
-marks it as breaking and gives the one-line migration (2.0.0 and 2.3.0 are examples).
+A change that drops or replaces a flag, config key, environment variable, backend or
+log format follows [`CONTRIBUTING.md` § Breaking changes](CONTRIBUTING.md#breaking-changes).
+A release is a version bump in `.claude-plugin/plugin.json` with its `CHANGELOG.md`
+entry and a `v<version>` git tag; the marketplace installs from `main`, so a version
+on `main` is released. CHANGELOG marks a breaking change and gives the one-line
+migration.
 
 ## Tests
 

@@ -1,0 +1,48 @@
+name: Spike / Verification
+description: Something to verify or investigate before committing to an approach
+title: "Spike: "
+labels: ["spike"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Uncertainty / question
+      description: What remains unresolved.
+    validations:
+      required: true
+  - type: textarea
+    id: why-now
+    attributes:
+      label: Why verify now
+      description: The work this blocks.
+    validations:
+      required: true
+  - type: textarea
+    id: pass-criteria
+    attributes:
+      label: Pass criteria
+      description: Observable results that confirm the assumption.
+      value: |
+        -
+    validations:
+      required: true
+  - type: textarea
+    id: related
+    attributes:
+      label: Related issues and decisions
+      description: "`Part of #N` on its own line, and the decision issues under test."
+  - type: checkboxes
+    id: method
+    attributes:
+      label: Verification method
+      options:
+        - label: Upstream docs cross-check
+        - label: Measure directly in the running system
+        - label: Decision that needs user confirmation
+  - type: checkboxes
+    id: done
+    attributes:
+      label: Definition of Done
+      options:
+        - label: The closing comment states the result, the measured evidence, and the rejected option or fallback
+        - label: Each decision issue under test is confirmed, or a new decision issue records the change
